@@ -162,4 +162,4 @@ cython_debug/
 #.idea/
 
 # Ouput files
-*.xlsx
+# *.xlsx
