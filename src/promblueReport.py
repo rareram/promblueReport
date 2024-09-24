@@ -7,7 +7,7 @@ import argparse
 import requests
 from datetime import datetime, timedelta
 
-__version__ = '0.3.1'
+__version__ = '0.3.4'
 
 def get_version():
     return __version__
@@ -36,7 +36,7 @@ def load_config(filename):
     required_settings = {
         'files': ['extdata_prefix', 'output_prefix'],
         'prometheus': ['url', 'queries'],
-        'ollama': ['url']
+        'ollama': ['url', 'timeout']
     }
 
     for section, keys in required_settings.items():
@@ -45,6 +45,11 @@ def load_config(filename):
         for key in keys:
             if key not in config[section]:
                 raise ValueError(f"Missing key '{key}' in section '{section}' of config file")
+    # ollama timeout 값을 정수로 변환
+    try:
+        ollama_timeout = int(config['ollama']['timeout'])
+    except ValueError:
+        raise ValueError("Ollama timeout must be an integer value in seconds")
 
     # 프롬프트 검증 및 처리
     if 'prompts' not in config:
@@ -54,7 +59,7 @@ def load_config(filename):
     if not prompts:
         raise ValueError("No prompts defined in config file")
     
-    return config, prompts
+    return config, prompts, ollama_timeout
 
 def create_workbook_formats(workbook, style_config):
     formats = {}
@@ -112,7 +117,7 @@ def query_prometheus(prom_url, query, start_time, end_time):
         print(f"End time: {end_time}")
         return None
 
-def get_ollama_feedback(ollama_url, prompt, metrics_dump, timeout=300):
+def get_ollama_feedback(ollama_url, prompt, metrics_dump, timeout):
     headers = {'Content-Type': 'application/json'}
     data = {
         "model": "llama3.1",
@@ -121,13 +126,14 @@ def get_ollama_feedback(ollama_url, prompt, metrics_dump, timeout=300):
     }
 
     try:
+        timeout = int(timeout)
         response = requests.post(ollama_url, headers=headers, json=data, timeout=timeout)
         if response.status_code == 200:
             return response.json()['response']
         else:
             return f"Failed to get feedback from Ollama. Status code: {response.status_code}"
     except requests.exceptions.Timeout:
-        return "Error: Ollama request timed out. The server might be busy or the task might be too complex."
+        return "Error: Ollama request timed out after {timeout} seconds. The server might be busy or the task might be too complex."
     except requests.exceptions.RequestException as e:
         return f"Error connecting to Ollama: {str(e)}"
 
@@ -140,7 +146,7 @@ def generate_output_filename(prefix, target):
         target_name = target.replace('.', '_')
     return f"{prefix}_{target_name}_{date_time}.xlsx"
 
-def generate_report(config_df, config, prompts, start_time, end_time, output_file, target, prompt_index):
+def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_time, output_file, target, prompt_index):
     workbook = Workbook(output_file)
     formats = create_workbook_formats(workbook, config)
 
@@ -189,7 +195,12 @@ def generate_report(config_df, config, prompts, start_time, end_time, output_fil
                 worksheet.write(3, col, 'N/A', formats['format_string2'])
                 server_metrics += f"{headers[col]}: N/A\n"
 
-        ollama_feedback = get_ollama_feedback(config['ollama']['url'], selected_prompt, server_metrics, timeout=300)
+        ollama_feedback = get_ollama_feedback(
+            config['ollama']['url'],
+            selected_prompt,
+            server_metrics,
+            ollama_timeout
+        )
 
         worksheet.merge_range('A5:F5', '종합 의견', formats['format_title2'])
         worksheet.merge_range('A6:F10', ollama_feedback, formats['format_string1'])
@@ -209,7 +220,7 @@ def main():
     print_version()  # 스크립트 실행 시 버전 정보 출력
 
     try:
-        config, prompts = load_config(args.config)
+        config, prompts, ollama_timeout = load_config(args.config)
         print(f"Configuration loaded from {args.config}")
 
         if args.list_prompts:
@@ -232,7 +243,7 @@ def main():
             args.prompt = 0
 
         print(f"Using prompt index: {args.prompt}")
-        generate_report(extdata_df, config, prompts, start_time, end_time, output_file, args.target, args.prompt)
+        generate_report(extdata_df, config, prompts, ollama_timeout, start_time, end_time, output_file, args.target, args.prompt)
         print(f"Report generated successfully: {output_file}")
 
     except Exception as e:

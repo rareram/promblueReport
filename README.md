@@ -106,3 +106,9 @@ def generate_report(config_df, config, start_time, end_time, output_file, target
 
     workbook.close()
 ```
+
+## Releases
+
+**0.3.4**
+
+- [FIX] specify ollama feedback timeout option
