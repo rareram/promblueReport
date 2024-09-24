@@ -7,7 +7,7 @@ import argparse
 import requests
 from datetime import datetime, timedelta
 
-__version__ = '0.3.4'
+__version__ = '0.3.5'
 
 def get_version():
     return __version__
@@ -143,8 +143,9 @@ def generate_output_filename(prefix, target):
     if target.startswith('service:'):
         target_name = target.split(':', 1)[1]
     else:
-        target_name = target.replace('.', '_')
-    return f"{prefix}_{target_name}_{date_time}.xlsx"
+        # target_name = target.replace('.', '_')
+        target_name = target
+    return f"{prefix}({target_name})-{date_time}.xlsx"
 
 def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_time, output_file, target, prompt_index):
     workbook = Workbook(output_file)
@@ -169,7 +170,10 @@ def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_
 
     for _, server in servers.iterrows():
         ip_address = server['사설IP'] if pd.notnull(server['사설IP']) else server['공인/NAT IP']
-        sheet_name = f"Server_{ip_address.replace('.', '_')}"
+        # sheet_name = f"Server_{ip_address.replace('.', '_')}"
+        sheet_name = f"{ip_address}"
+        if len(sheet_name) > 31:
+            sheet_name = sheet_name[:31]
         worksheet = workbook.add_worksheet(sheet_name)
 
         worksheet.write('A1', f'서버 점검 보고서 - {server["IT구성정보명"]}', formats['format_title1'])

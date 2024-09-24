@@ -107,8 +107,9 @@ def generate_report(config_df, config, start_time, end_time, output_file, target
     workbook.close()
 ```
 
-## Releases
+## Commit History
 
-**0.3.4**
+**0.3.5**
 
-- [FIX] specify ollama feedback timeout option
+- [FIX] Change IP notation in filename, sheetname
+- [UPDATE] specify ollama feedback timeout option
