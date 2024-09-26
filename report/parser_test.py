@@ -42,8 +42,8 @@ logging.info("Script completed")
 
 print(f"Python version: {sys.version}")
 
-# python3 parser_test.py --time 24h --target 172.24.203.190
-# python3 parser_test.py --time 7d --target 172.24.203.190
-# python3 parser_test.py --time today --target 172.24.203.190
-# python3 parser_test.py --time 2024-09-23 --target 172.24.203.190
-# python3 parser_test.py --target 172.24.203.190
+# python3 parser_test.py --time 24h --target 10.10.10.10
+# python3 parser_test.py --time 7d --target 10.10.10.10
+# python3 parser_test.py --time today --target 10.10.10.10
+# python3 parser_test.py --time 2024-09-23 --target 10.10.10.10
+# python3 parser_test.py --target 10.10.10.10
