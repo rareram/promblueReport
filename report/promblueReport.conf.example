@@ -3,8 +3,7 @@ extdata_prefix = 구성관리조회
 output_prefix = 서버진단보고서
 
 [prometheus]
-# url = http://localhost:9090
-url = http://172.24.203.190:9090
+url = http://localhost:9090
 queries = 
     100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle", instance="{ip}:9100"}[5m])) * 100)
     100 * (1 - ((avg_over_time(node_memory_MemFree_bytes{{instance="{ip}:9100"}}[5m]) + avg_over_time(node_memory_Cached_bytes{{instance="{ip}:9100"}}[5m]) + avg_over_time(node_memory_Buffers_bytes{{instance="{ip}:9100"}}[5m])) / avg_over_time(node_memory_MemTotal_bytes{{instance="{ip}:9100"}}[5m])))
@@ -12,7 +11,6 @@ queries =
 
 [ollama]
 url = http://localhost:11434/api/generate
-# url = http://172.24.203.190:11434/api/generate
 timeout = 300
 
 [prompts]
