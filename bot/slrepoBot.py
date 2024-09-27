@@ -3,29 +3,37 @@ import glob
 import re
 import subprocess
 import pandas as pd
-# from slack_bolt import App
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
-from slack_sdk.errors import SlackApiError
 import configparser
 from datetime import datetime
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
+import textwrap
 
-__version__ = '0.2.7'
+__version__ = '0.2.22'
 
 # 설정 파일 읽기
 config = configparser.ConfigParser()
 config.read('slrepoBot.conf')
 
-# 문서 생성 로깅 설정
+# 로깅 설정
 log_dir = os.path.join(os.path.dirname(__file__), config['LOGGING']['log_file_dir'])
 os.makedirs(log_dir, exist_ok=True)
 log_file = os.path.join(log_dir, config['LOGGING']['log_file'])
+log_max_bytes = config['LOGGING'].getint('log_max_bytes')
+log_backup_count = config['LOGGING'].getint('log_backup_count')
+
+handler = RotatingFileHandler(
+    log_file,
+    maxBytes=log_max_bytes,
+    backupCount=log_backup_count
+)
 logging.basicConfig(
-    filename=log_file,
+    handlers=[handler],
     level=getattr(logging, config['LOGGING']['log_level']),
-    format='%(asctime)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
@@ -37,8 +45,6 @@ SLACK_BOT_TOKEN = config['SLACK']['bot_token']
 app = AsyncApp(token=SLACK_BOT_TOKEN)
 
 # 큐 설정 및 초기화 (큐 설정을 할 경우 redis 설치 필요)
-# USE_QUEUE = config['QUEUE'].getboolean('use_queue', fallback=False)
-# TIMEOUT = config['QUEUE'].getint('timeout', fallback=300)
 if config['QUEUE'].getboolean('use_queue', fallback=False):
     import redis
     from rq import Queue
@@ -60,17 +66,43 @@ def get_latest_csv_file(directory, prefix, extension):
         raise FileNotFoundError(f"No files found matching the pattern: {pattern}")
     return max(files, key=os.path.getctime)
 
+def load_template():
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, 'slrepoBot.conf')
+        
+        config = configparser.ConfigParser()
+        config.read(config_path, encoding='utf-8')
+        
+        if 'TEMPLATES' not in config:
+            logging.error("TEMPLATES section not found in config file.")
+            return None
+        
+        template = config['TEMPLATES']['info_template']
+        template = template.replace('##', '\n')
+        template = textwrap.dedent(template)
+        
+        if not template.strip():
+            logging.error("Template is empty or contains only whitespace.")
+            return None
+        
+        return template
+    except Exception as e:
+        logging.error(f"Failed to load template: {str(e)}", exc_info=True)
+        return None
+
 # CSV 파일 경로 설정
-# CSV_FILE = config['FILES']['csv_file']
 CSV_FILE = get_latest_csv_file(
     os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
     config['FILES']['csv_file_prefix'],
     config['FILES']['csv_file_extension']
 )
 
-# 템플릿 및 컬럼 설정
-INFO_TEMPLATE = config['TEMPLATES']['info_template']
-INFO_COLUMNS = config['COLUMNS']['info_columns'].split(',')
+# 템플릿 설정
+INFO_TEMPLATE = load_template()
+if INFO_TEMPLATE is None:
+    logging.critical("Failed to load INFO_TEMPLATE. Application cannot proceed.")
+    raise SystemExit("Critical error: Failed to load template")
 
 async def process_report(ip, time, channel_id, user_id):
     logging.info(f"요청 <@{user_id}> 대상 서버IP {ip}")
@@ -78,7 +110,6 @@ async def process_report(ip, time, channel_id, user_id):
         out_dir = os.path.join(os.path.dirname(__file__), config['FILES']['out_file_dir'])
         os.makedirs(out_dir, exist_ok=True)
         
-        # 고유한 요청 ID 생성
         request_id = f"{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         
         result = subprocess.run(
@@ -89,12 +120,7 @@ async def process_report(ip, time, channel_id, user_id):
             timeout=config['QUEUE'].getint('timeout', fallback=300)
         )
         
-        # 생성된 보고서 파일 찾기
-        output_file = None
-        for line in result.stdout.split('\n'):
-            if line.startswith("Report generated successfully:"):
-                output_file = line.split(": ")[1].strip()
-                break
+        output_file = next((line.split(": ")[1].strip() for line in result.stdout.split('\n') if line.startswith("Report generated successfully:")), None)
         
         if output_file and os.path.exists(output_file):
             time_display = "오늘 0시부터 현재까지" if time == 'today' else time
@@ -134,14 +160,14 @@ async def handle_report_command(ack, say, command):
     await say(f"<@{command['user_id']}> 보고서 생성 요청을 받았습니다. 처리 중입니다...")
     asyncio.create_task(process_report(ip, time, command['channel_id'], command['user_id']))
 
-@app.command("/info")
-async def handle_info_command(ack, say, command):
+@app.command("/server_info")
+async def handle_server_info_command(ack, say, command):
     await ack()
     text = command['text']
     match = re.match(r'(\S+)', text)
 
     if not match:
-        await say("잘못된 형식입니다. 사용법: /info <IP>")
+        await say("잘못된 형식입니다. 사용법: /server_info <IP>")
         return
     
     ip = match.group(1)
@@ -149,18 +175,23 @@ async def handle_info_command(ack, say, command):
     try:
         df = pd.read_csv(CSV_FILE, encoding='utf-8')
         server_info = df[(df['사설IP'] == ip) | (df['공인/NAT IP'] == ip)]
-
+        
         if server_info.empty:
             await say(f"{ip}에 해당하는 서버 정보를 찾을 수 없습니다.")
             return
         
-        info = INFO_TEMPLATE
-        for column in INFO_COLUMNS:
-            info = info.replace(f"{{{column}}}", str(server_info[column].values[0]))
-
-        await say(info)
+        formatted_info = INFO_TEMPLATE
+        for column in server_info.columns:
+            placeholder = f"{{{column}}}"
+            if placeholder in formatted_info:
+                value = server_info[column].values[0]
+                value = 'N/A' if pd.isna(value) or value == '' else str(value)
+                formatted_info = formatted_info.replace(placeholder, value)
+        
+        await say(formatted_info)
     
     except Exception as e:
+        logging.error(f"Error occurred while handling /server_info command: {str(e)}", exc_info=True)
         await say(f"서버 정보 조회 중 오류가 발생했습니다: {str(e)}")
 
 @app.command("/bot_ver")
