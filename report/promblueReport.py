@@ -1,4 +1,5 @@
 import os
+import glob
 import pandas as pd
 from xlsxwriter import Workbook
 from prometheus_api_client import PrometheusConnect
@@ -7,7 +8,7 @@ import argparse
 import requests
 from datetime import datetime, timedelta
 
-__version__ = '0.3.5'
+__version__ = '0.3.10'
 
 def get_version():
     return __version__
@@ -16,10 +17,18 @@ def print_version():
     print(f"promblueReport version {get_version()}")
 
 def get_latest_extdata_file(prefix):
-    files = [f for f in os.listdir('.') if f.startswith(prefix) and f.endswith('.csv')]
-    if not files:
-        raise FileNotFoundError(f"No files found with prefix '{prefix}'")
-    return max(files, key=os.path.getmtime)
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # data 디렉토리 경로
+    data_dir = os.path.join(root_dir, 'data')
+    # data 디렉토리에서 prefix로 시작하는 모든 CSV 파일 찾기
+    pattern = os.path.join(data_dir, f"{prefix}*.csv")
+    matching_files = glob.glob(pattern)
+    
+    if not matching_files:
+        raise FileNotFoundError(f"No files found with prefix '{prefix}' in {data_dir}")
+    
+    # 가장 최근에 수정된 파일을 반환
+    return max(matching_files, key=os.path.getmtime)
 
 def read_extdata_file(filename):
     # CSV 파일 읽기, 제목 2줄 건너뛰기
@@ -143,20 +152,19 @@ def generate_output_filename(prefix, target):
     if target.startswith('service:'):
         target_name = target.split(':', 1)[1]
     else:
-        # target_name = target.replace('.', '_')
         target_name = target
-    return f"{prefix}({target_name})-{date_time}.xlsx"
+    
+    # 프로젝트 루트 디렉토리 경로
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # output 디렉토리 경로
+    output_dir = os.path.join(root_dir, 'output')
+    # output 디렉토리가 없으면 생성
+    os.makedirs(output_dir, exist_ok=True)
+    
+    filename = f"{prefix}({target_name})-{date_time}.xlsx"
+    return os.path.join(output_dir, filename)
 
-def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_time, output_file, target, prompt_index):
-    workbook = Workbook(output_file)
-    formats = create_workbook_formats(workbook, config)
-
-    if prompt_index < 0 or prompt_index >= len(prompts):
-        print(f"Warning: Invalid prompt index {prompt_index}. Using the first prompt.")
-        prompt_index = 0
-
-    selected_prompt = prompts[prompt_index]
-
+def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_time, output_file, target, prompt_index, skip_ollama=False):
     if target.startswith('service:'):
         service_name = target.split(':', 1)[1]
         servers = config_df[config_df['서비스'] == service_name]
@@ -167,15 +175,15 @@ def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_
         raise ValueError(f"No servers found for the given target: {target}")
 
     queries = get_queries(config)
+    
+    unavailable_servers = []
+    workbook = Workbook(output_file)
+    formats = create_workbook_formats(workbook, config)
 
     for _, server in servers.iterrows():
         ip_address = server['사설IP'] if pd.notnull(server['사설IP']) else server['공인/NAT IP']
-        # sheet_name = f"Server_{ip_address.replace('.', '_')}"
-        sheet_name = f"{ip_address}"
-        if len(sheet_name) > 31:
-            sheet_name = sheet_name[:31]
-        worksheet = workbook.add_worksheet(sheet_name)
-
+        
+        worksheet = workbook.add_worksheet(ip_address[:31])
         worksheet.write('A1', f'서버 점검 보고서 - {server["IT구성정보명"]}', formats['format_title1'])
         worksheet.merge_range('A1:F1', f'서버 점검 보고서 - {server["IT구성정보명"]}', formats['format_title1'])
 
@@ -188,28 +196,43 @@ def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_
         worksheet.write(3, 2, f"{server['서버 OS']} {server['서버 OS Version']}", formats['format_string1'])
 
         server_metrics = f"Server: {server['IT구성정보명']} ({ip_address})\n"
+        metrics_available = False
+        
         for col, query in enumerate(queries, start=3):
             formatted_query = format_query(query, ip_address)
             result = query_prometheus(config['prometheus']['url'], formatted_query, start_time, end_time)
             if result and result[0]['values']:
-                value = result[0]['values'][-1][1]
-                worksheet.write(3, col, float(value), formats['format_stat1'])
-                server_metrics += f"{headers[col]}: {value}\n"
+                metrics_available = True
+                values = [float(v[1]) for v in result[0]['values']]
+                avg_value = sum(values) / len(values)
+                worksheet.write(3, col, avg_value, formats['format_stat1'])
+                server_metrics += f"{headers[col]}: {avg_value}\n"
             else:
                 worksheet.write(3, col, 'N/A', formats['format_string2'])
                 server_metrics += f"{headers[col]}: N/A\n"
 
-        ollama_feedback = get_ollama_feedback(
-            config['ollama']['url'],
-            selected_prompt,
-            server_metrics,
-            ollama_timeout
-        )
-
-        worksheet.merge_range('A5:F5', '종합 의견', formats['format_title2'])
-        worksheet.merge_range('A6:F10', ollama_feedback, formats['format_string1'])
+        if not metrics_available:
+            unavailable_servers.append(f"{server['IT구성정보명']} ({ip_address})")
+            worksheet.merge_range('A5:F5', '서버 상태', formats['format_title2'])
+            worksheet.merge_range('A6:F10', 'Prometheus node_exporter로부터 데이터를 받을 수 없습니다. 서버 상태를 확인해주세요.', formats['format_string1'])
+        elif not skip_ollama:
+            ollama_feedback = get_ollama_feedback(
+                config['ollama']['url'],
+                prompts[prompt_index],
+                server_metrics,
+                ollama_timeout
+            )
+            worksheet.merge_range('A5:F5', '종합 의견', formats['format_title2'])
+            worksheet.merge_range('A6:F10', ollama_feedback, formats['format_string1'])
+        else:
+            worksheet.merge_range('A5:F5', '종합 의견', formats['format_title2'])
+            worksheet.merge_range('A6:F10', 'Ollama 피드백 생략', formats['format_string1'])
 
     workbook.close()
+
+    if unavailable_servers:
+        return f"다음 서버의 Prometheus node_exporter를 확인해주세요:\n" + "\n".join(unavailable_servers)
+    return None
 
 def main():
     parser = argparse.ArgumentParser(description='Generate server inspection report')
@@ -217,6 +240,7 @@ def main():
     parser.add_argument('--target', type=str, required=True, help='IP address or service name (prefix with "service:")')
     parser.add_argument('--config', type=str, default='promblueReport.conf', help='Path to the configuration file')
     parser.add_argument('--prompt', type=int, default=0, help='Index of the prompt to use (default: 0, first prompt)')
+    parser.add_argument('--skip-ollama', action='store_true', help='Skip Ollama feedback generation')
     parser.add_argument('--version', action='version', version=f'%(prog)s {get_version()}')
     parser.add_argument('--list-prompts', action='store_true', help='List available prompts and exit')
     args = parser.parse_args()
@@ -247,9 +271,13 @@ def main():
             args.prompt = 0
 
         print(f"Using prompt index: {args.prompt}")
-        generate_report(extdata_df, config, prompts, ollama_timeout, start_time, end_time, output_file, args.target, args.prompt)
+        message = generate_report(extdata_df, config, prompts, ollama_timeout, start_time, end_time, output_file, args.target, args.prompt, args.skip_ollama)
+        if message:
+            print(message)
         print(f"Report generated successfully: {output_file}")
 
+    except ValueError as e:
+        print(f"Error: {str(e)}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         import traceback
