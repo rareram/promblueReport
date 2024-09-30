@@ -16,7 +16,8 @@ def load_templates(config_path):
     return templates
 
 def load_csv(csv_path):
-    return pd.read_csv(csv_path, encoding='utf-8')
+    # return pd.read_csv(csv_path, encoding='utf-8')
+    return pd.read_csv(csv_path, encoding='euc-kr')
 
 def get_server_info(df, ip):
     return df[(df['사설IP'] == ip) | (df['공인/NAT IP'] == ip)]
@@ -27,14 +28,15 @@ def format_server_info(template, server_info):
         placeholder = f"{{{column}}}"
         if placeholder in formatted_info:
             value = server_info[column].values[0]
-            value = 'N/A' if pd.isna(value) or value == '' else str(value)
+            value = '-' if pd.isna(value) or value == '' else str(value)
             formatted_info = formatted_info.replace(placeholder, value)
     return formatted_info
 
 def main():
     config_path = 'slrepoBot.conf'
-    csv_path = '../data/구성관리조회_202409010001.csv'
-    ip = '10.10.10.10'
+    csv_path = '../data/구성관리조회 (서버 관리자용)_20240923102100.csv'
+    # ip = '10.10.10.10'
+    ip = '175.123.252.167'
 
     try:
         df = load_csv(csv_path)

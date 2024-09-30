@@ -12,7 +12,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import textwrap
 
-__version__ = '0.2.22'
+__version__ = '0.3.0'
 
 # 설정 파일 읽기
 config = configparser.ConfigParser()
@@ -173,7 +173,8 @@ async def handle_server_info_command(ack, say, command):
     ip = match.group(1)
 
     try:
-        df = pd.read_csv(CSV_FILE, encoding='utf-8')
+        # df = pd.read_csv(CSV_FILE, encoding='utf-8')
+        df = pd.read_csv(CSV_FILE, encoding='euc-kr')
         server_info = df[(df['사설IP'] == ip) | (df['공인/NAT IP'] == ip)]
         
         if server_info.empty:
