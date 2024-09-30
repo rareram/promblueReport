@@ -1,92 +1,63 @@
-import os
-import glob
-import pandas as pd
 import configparser
+import pandas as pd
 
-# 설정 파일 읽기
-config = configparser.ConfigParser()
-config.read('slrepoBot.conf')
+def load_templates(config_path):
+    config = configparser.ConfigParser()
+    config.read(config_path, encoding='utf-8')
+    
+    if 'TEMPLATES' not in config:
+        raise ValueError("TEMPLATES section not found in config file.")
+    
+    templates = {}
+    for key, value in config['TEMPLATES'].items():
+        if key.endswith('_template'):
+            templates[key] = value.replace('##', '\n')
+    
+    return templates
 
-def get_latest_csv_file(directory, prefix):
-    pattern = os.path.join(directory, f"{prefix}*.csv")
-    print(f"Searching for files matching pattern: {pattern}")
-    files = glob.glob(pattern)
-    if not files:
-        print(f"No files found. Trying a more flexible pattern.")
-        pattern = os.path.join(directory, f"{prefix}*.csv*")
-        files = glob.glob(pattern)
-    if not files:
-        raise FileNotFoundError(f"No CSV files found matching the pattern: {pattern}")
-    return max(files, key=os.path.getmtime)
+def load_csv(csv_path):
+    return pd.read_csv(csv_path, encoding='utf-8')
 
-def read_csv_file(file_path):
-    try:
-        # 헤더 없이 CSV 파일 읽기
-        df = pd.read_csv(file_path, header=None, encoding='utf-8')
-        print("Successfully read the file with UTF-8 encoding.")
-    except UnicodeDecodeError:
-        # UTF-8로 실패하면 CP949로 시도
-        df = pd.read_csv(file_path, header=None, encoding='cp949')
-        print("Successfully read the file with CP949 encoding.")
-    
-    # 실제 헤더 행 찾기
-    header_row = df[df.iloc[:, 0] == 'ID'].index[0]
-    
-    # 헤더 행을 열 이름으로 설정
-    df.columns = df.iloc[header_row]
-    
-    # 헤더 행 이후의 데이터만 유지
-    df = df.iloc[header_row + 1:].reset_index(drop=True)
-    
-    return df
+def get_server_info(df, ip):
+    return df[(df['사설IP'] == ip) | (df['공인/NAT IP'] == ip)]
+
+def format_server_info(template, server_info):
+    formatted_info = template
+    for column in server_info.columns:
+        placeholder = f"{{{column}}}"
+        if placeholder in formatted_info:
+            value = server_info[column].values[0]
+            value = 'N/A' if pd.isna(value) or value == '' else str(value)
+            formatted_info = formatted_info.replace(placeholder, value)
+    return formatted_info
 
 def main():
-    # CSV 파일 경로 설정
-    csv_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
-    csv_prefix = config['FILES']['csv_file_prefix']
-    
-    print(f"Looking for CSV files in directory: {csv_dir}")
-    print(f"CSV file prefix: {csv_prefix}")
-    
-    csv_file = get_latest_csv_file(csv_dir, csv_prefix)
-    
-    print(f"Reading CSV file: {csv_file}")
-    
-    df = read_csv_file(csv_file)
-    
-    # 열 이름 출력
-    print("\nColumn names in the CSV file:")
-    for col in df.columns:
-        print(f"'{col}'")
-    
-    target_ip = '10.10.10.10'
-    ip_columns = ['사설IP', '공인/NAT IP']
-    
-    for col in ip_columns:
-        if col in df.columns:
-            server_info = df[df[col] == target_ip]
-            if not server_info.empty:
-                break
-    else:
-        print(f"No server found with IP {target_ip}")
-        return
-    
-    if not server_info.empty:
-        service = server_info['서비스'].values[0]
-        print(f"\nServer with IP {target_ip} belongs to service: {service}")
-        print("Other information:")
-        info_columns = [
-            'IT구성정보명', '자산 설명', '유지보수 업체', '유지보수담당자', 
-            'HW 소유부서', 'HW 담당자(정)', 'HW 담당자(부)',
-            'SW 소유부서', 'SW 관리자', '도입년월'
-        ]
-        for column in info_columns:
-            if column in server_info.columns:
-                value = server_info[column].values[0]
-                if pd.notna(value):  # NaN 값이 아닌 경우에만 출력
-                    print(f"- {column}: {value}")
-            else:
-                print(f"- {column}: Column not found")
+    config_path = 'slrepoBot.conf'
+    csv_path = '../data/구성관리조회_202409010001.csv'
+    ip = '10.10.10.10'
+
+    try:
+        df = load_csv(csv_path)
+        
+        print("CSV columns:")
+        for col in df.columns:
+            print(f"- {col}")
+        print("\n" + "="*50 + "\n")
+
+        templates = load_templates(config_path)
+        server_info = get_server_info(df, ip)
+
+        if server_info.empty:
+            print(f"No server info found for IP: {ip}")
+        else:
+            print(f"Server info for IP {ip}:")
+            for name, template in templates.items():
+                print(f"\n{name} result:\n{'-'*50}")
+                formatted_info = format_server_info(template, server_info)
+                print(formatted_info)
+
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
     main()
