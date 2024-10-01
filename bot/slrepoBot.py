@@ -3,6 +3,7 @@ import glob
 import re
 import subprocess
 import pandas as pd
+import random
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import configparser
@@ -12,7 +13,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import textwrap
 
-__version__ = '0.2.22'
+__version__ = '0.3.5'
 
 # 설정 파일 읽기
 config = configparser.ConfigParser()
@@ -66,7 +67,63 @@ def get_latest_csv_file(directory, prefix, extension):
         raise FileNotFoundError(f"No files found matching the pattern: {pattern}")
     return max(files, key=os.path.getctime)
 
-def load_template():
+# CSV 파일 경로 설정
+CSV_FILE = get_latest_csv_file(
+    os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
+    config['FILES']['csv_file_prefix'],
+    config['FILES']['csv_file_extension']
+)
+
+# 점심메뉴 추천
+LUNCH_CSV_FILE = os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir'], 'babzip.csv')
+
+def read_extdata_file(filename):
+    if filename.endswith('babzip.csv'):
+        return pd.read_csv(filename, encoding='utf-8')
+    else:
+        return pd.read_csv(filename, encoding='euc-kr')
+
+def read_lunch_csv():
+    return read_extdata_file(LUNCH_CSV_FILE)
+
+def get_random_menu(df, cuisine=None):
+    if cuisine and cuisine != '그냥추천':
+        df = df[df['구분'] == cuisine]
+
+    if df.empty:
+        return None
+    
+    restaurant = df.sample(n=1).iloc[0]
+    menus = [restaurant['메뉴1'], restaurant['메뉴2'], restaurant['메뉴3']]
+    menu = random.choice([m for m in menus if pd.notna(m)])
+
+    return {
+        '식당': restaurant['식당'],
+        '메뉴': menu,
+        '링크': restaurant['링크']
+    }
+
+# 버튼 생성 함수
+def create_buttons():
+    df = read_lunch_csv()
+    cuisines = df['구분'].unique().tolist()
+    cuisines.append('그냥추천')
+
+    buttons = []
+    for cuisine in cuisines:
+        buttons.append({
+            "type": "button",
+            "text": {"type": "plain_text", "text": cuisine},
+            "value": cuisine,
+            "action_id": f"lunch_recommendation_{cuisine}"
+        })
+
+    return {
+        "type": "actions",
+        "elements": buttons
+    }
+
+def load_template(template_name):
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(script_dir, 'slrepoBot.conf')
@@ -78,28 +135,23 @@ def load_template():
             logging.error("TEMPLATES section not found in config file.")
             return None
         
-        template = config['TEMPLATES']['info_template']
+        template = config['TEMPLATES'][template_name]
         template = template.replace('##', '\n')
         template = textwrap.dedent(template)
         
         if not template.strip():
-            logging.error("Template is empty or contains only whitespace.")
+            logging.error("Template {template_name} is empty or contains only whitespace.")
             return None
         
         return template
     except Exception as e:
-        logging.error(f"Failed to load template: {str(e)}", exc_info=True)
+        logging.error(f"Failed to load template {template_name}: {str(e)}", exc_info=True)
         return None
 
-# CSV 파일 경로 설정
-CSV_FILE = get_latest_csv_file(
-    os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
-    config['FILES']['csv_file_prefix'],
-    config['FILES']['csv_file_extension']
-)
-
 # 템플릿 설정
-INFO_TEMPLATE = load_template()
+INFO_TEMPLATE = load_template('info_template')
+MNGT_TEMPLATE = load_template('mngt_template')
+
 if INFO_TEMPLATE is None:
     logging.critical("Failed to load INFO_TEMPLATE. Application cannot proceed.")
     raise SystemExit("Critical error: Failed to load template")
@@ -111,9 +163,19 @@ async def process_report(ip, time, channel_id, user_id):
         os.makedirs(out_dir, exist_ok=True)
         
         request_id = f"{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        command = [
+            "python3",
+            os.path.join(os.path.dirname(__file__), "..", "report", "promblueReport.py"),
+            "--target", ip,
+            "--output", out_dir,
+            "--request-id", request_id
+        ]
+        if time:
+            command.extend(["--time", time])
         
         result = subprocess.run(
-            ["python3", "../report/promblueReport.py", "--time", time, "--target", ip, "--output", out_dir, "--request-id", request_id],
+            command,
             capture_output=True,
             text=True,
             check=True,
@@ -141,7 +203,7 @@ async def process_report(ip, time, channel_id, user_id):
         await app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서 생성 중 오류가 발생했습니다: {str(e)}")
         logging.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 오류: {str(e)}")
 
-@app.command("/report")
+@app.command("/server_report")
 async def handle_report_command(ack, say, command):
     await ack()
     text = command['text']
@@ -160,39 +222,122 @@ async def handle_report_command(ack, say, command):
     await say(f"<@{command['user_id']}> 보고서 생성 요청을 받았습니다. 처리 중입니다...")
     asyncio.create_task(process_report(ip, time, command['channel_id'], command['user_id']))
 
-@app.command("/server_info")
-async def handle_server_info_command(ack, say, command):
+async def handle_server_command(ack, say, command, template):
     await ack()
     text = command['text']
     match = re.match(r'(\S+)', text)
 
     if not match:
-        await say("잘못된 형식입니다. 사용법: /server_info <IP>")
+        await say(f"잘못된 형식입니다. 사용법: {command['command']} <IP>")
         return
     
     ip = match.group(1)
 
     try:
-        df = pd.read_csv(CSV_FILE, encoding='utf-8')
+        df = read_extdata_file(CSV_FILE)
         server_info = df[(df['사설IP'] == ip) | (df['공인/NAT IP'] == ip)]
         
         if server_info.empty:
             await say(f"{ip}에 해당하는 서버 정보를 찾을 수 없습니다.")
             return
         
-        formatted_info = INFO_TEMPLATE
+        formatted_info = template
         for column in server_info.columns:
             placeholder = f"{{{column}}}"
             if placeholder in formatted_info:
                 value = server_info[column].values[0]
-                value = 'N/A' if pd.isna(value) or value == '' else str(value)
+                # 칼럼값이 없을때 치환문자
+                value = '-' if pd.isna(value) or value == '' else str(value)
                 formatted_info = formatted_info.replace(placeholder, value)
         
         await say(formatted_info)
     
     except Exception as e:
-        logging.error(f"Error occurred while handling /server_info command: {str(e)}", exc_info=True)
+        logging.error(f"Error occurred while handling {command['command']} command: {str(e)}", exc_info=True)
         await say(f"서버 정보 조회 중 오류가 발생했습니다: {str(e)}")
+
+@app.command("/server_info")
+async def handle_server_info_command(ack, say, command):
+    await handle_server_command(ack, say, command, INFO_TEMPLATE)
+
+@app.command("/server_mngt")
+async def handle_server_mngt_command(ack, say, command):
+    await handle_server_command(ack, say, command, MNGT_TEMPLATE)
+
+@app.command("/조보아씨이리와봐유")
+async def handle_lunch_command(ack, say):
+    await ack()
+    buttons = create_buttons()
+    await say(
+        text="메뉴 좀 골라봐유",
+        blocks=[
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "오늘은 뭐가 땡겨유?"}
+            },
+            buttons
+        ]
+    )
+
+@app.action("lunch_recommendation_한식")
+async def handle_korean_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '한식')
+
+@app.action("lunch_recommendation_중식")
+async def handle_chinese_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '중식')
+
+@app.action("lunch_recommendation_일식")
+async def handle_japanese_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '일식')
+
+@app.action("lunch_recommendation_그냥추천")
+async def handle_random_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '그냥추천')
+
+async def handle_cuisine_selection(body, say, cuisine):
+    df = read_lunch_csv()
+    recommendation = get_random_menu(df, cuisine)
+
+    if recommendation:
+        text = f"추천할께유"
+        await say(
+            text=text,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"오늘은 *{recommendation['식당']}* 가서 *{recommendation['메뉴']}* 한번 씹어봐유"}
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "어딘지 모르면 눌러봐유"},
+                            "url": recommendation['링크']
+                        }
+                    ]
+                }
+            ]
+        )
+    
+        await app.client.chat_update(
+            channel=body["channel"]["id"],
+            ts=body["message"]["ts"],
+            text="추천은 맘에 드는겨?",
+            blocks=[
+                {
+                    "type": "sections"
+                }
+            ]
+        )
+
+    else:
+        await say(f"{cuisine} 메뉴가 읍다는디?")
 
 @app.command("/bot_ver")
 async def handle_version_command(ack, say, command):

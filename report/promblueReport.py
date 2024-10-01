@@ -1,6 +1,7 @@
 import os
 import glob
 import pandas as pd
+import numpy as np
 from xlsxwriter import Workbook
 from prometheus_api_client import PrometheusConnect
 import configparser
@@ -8,7 +9,7 @@ import argparse
 import requests
 from datetime import datetime, timedelta
 
-__version__ = '0.3.10'
+__version__ = '0.3.12'
 
 def get_version():
     return __version__
@@ -31,10 +32,9 @@ def get_latest_extdata_file(prefix):
     return max(matching_files, key=os.path.getmtime)
 
 def read_extdata_file(filename):
-    # CSV 파일 읽기, 제목 2줄 건너뛰기
-    df = pd.read_csv(filename, encoding='utf-8', skiprows=2)
-    # 실제 데이터는 네 번째 줄부터 시작하므로 첫 번째 행을 건너뛰기
-    df = df.iloc[1:].reset_index(drop=True)
+    # df = pd.read_csv(filename, encoding='utf-8')
+    df = pd.read_csv(filename, encoding='euc-kr')
+    # df = df.iloc[1:].reset_index(drop=True)
     print("Columns in the CSV file:", df.columns.tolist())
     return df
 
@@ -85,7 +85,7 @@ def create_workbook_formats(workbook, style_config):
 
 def parse_time(time_str):
     now = datetime.now()
-    if time_str is None or time_str == '':
+    if time_str is None or time_str == '' or time_str == 'today':
         return now.replace(hour=0, minute=0, second=0, microsecond=0), now
     elif time_str.endswith('h'):
         hours = int(time_str[:-1])
@@ -93,8 +93,6 @@ def parse_time(time_str):
     elif time_str.endswith('d'):
         days = int(time_str[:-1])
         return (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0), now
-    elif time_str == 'today':
-        return now.replace(hour=0, minute=0, second=0, microsecond=0), now
     elif time_str == 'yesterday':
         yesterday = now - timedelta(days=1)
         return yesterday.replace(hour=0, minute=0, second=0, microsecond=0), yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -129,7 +127,7 @@ def query_prometheus(prom_url, query, start_time, end_time):
 def get_ollama_feedback(ollama_url, prompt, metrics_dump, timeout):
     headers = {'Content-Type': 'application/json'}
     data = {
-        "model": "llama3.1",
+        "model": "llama3.2",
         "prompt": f"{prompt}\n\nMetrics dump:\n{metrics_dump}",
         "stream": False
     }
@@ -183,7 +181,7 @@ def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_
     for _, server in servers.iterrows():
         ip_address = server['사설IP'] if pd.notnull(server['사설IP']) else server['공인/NAT IP']
         
-        worksheet = workbook.add_worksheet(ip_address[:31])
+        worksheet = workbook.add_worksheet(str(ip_address)[:31])
         worksheet.write('A1', f'서버 점검 보고서 - {server["IT구성정보명"]}', formats['format_title1'])
         worksheet.merge_range('A1:F1', f'서버 점검 보고서 - {server["IT구성정보명"]}', formats['format_title1'])
 
@@ -201,12 +199,16 @@ def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_
         for col, query in enumerate(queries, start=3):
             formatted_query = format_query(query, ip_address)
             result = query_prometheus(config['prometheus']['url'], formatted_query, start_time, end_time)
-            if result and result[0]['values']:
+            if result and isinstance(result, list) and len(result) > 0 and 'values' in result[0]:
                 metrics_available = True
-                values = [float(v[1]) for v in result[0]['values']]
-                avg_value = sum(values) / len(values)
-                worksheet.write(3, col, avg_value, formats['format_stat1'])
-                server_metrics += f"{headers[col]}: {avg_value}\n"
+                values = [float(v[1]) for v in result[0]['values'] if v[1] != 'NaN']
+                if values:
+                    avg_value = np.mean(values)
+                    worksheet.write(3, col, avg_value, formats['format_stat1'])
+                    server_metrics += f"{headers[col]}: {avg_value:.2f}\n"
+                else:
+                    worksheet.write(3, col, 'N/A', formats['format_string2'])
+                    server_metrics += f"{headers[col]}: N/A\n"
             else:
                 worksheet.write(3, col, 'N/A', formats['format_string2'])
                 server_metrics += f"{headers[col]}: N/A\n"
@@ -236,13 +238,15 @@ def generate_report(config_df, config, prompts, ollama_timeout, start_time, end_
 
 def main():
     parser = argparse.ArgumentParser(description='Generate server inspection report')
-    parser.add_argument('--time', type=str, default=None, help='Time parameter (e.g., 24h, 7d, today, yesterday, or YYYY-MM-DD. Default: today from 00:00 to now')
+    parser.add_argument('--time', type=str, default='today', help='Time parameter (e.g., 24h, 7d, today, yesterday, or YYYY-MM-DD. Default: today')
     parser.add_argument('--target', type=str, required=True, help='IP address or service name (prefix with "service:")')
+    parser.add_argument('--output', type=str, default='../output', help='Output directory')
     parser.add_argument('--config', type=str, default='promblueReport.conf', help='Path to the configuration file')
     parser.add_argument('--prompt', type=int, default=0, help='Index of the prompt to use (default: 0, first prompt)')
     parser.add_argument('--skip-ollama', action='store_true', help='Skip Ollama feedback generation')
     parser.add_argument('--version', action='version', version=f'%(prog)s {get_version()}')
     parser.add_argument('--list-prompts', action='store_true', help='List available prompts and exit')
+    parser.add_argument('--request-id', type=str, help='Unique identifier for the request')
     args = parser.parse_args()
 
     print_version()  # 스크립트 실행 시 버전 정보 출력
@@ -278,10 +282,12 @@ def main():
 
     except ValueError as e:
         print(f"Error: {str(e)}")
+        raise
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 if __name__ == "__main__":
     main()
