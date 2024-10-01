@@ -127,7 +127,7 @@ def query_prometheus(prom_url, query, start_time, end_time):
 def get_ollama_feedback(ollama_url, prompt, metrics_dump, timeout):
     headers = {'Content-Type': 'application/json'}
     data = {
-        "model": "llama3.1",
+        "model": "llama3.2",
         "prompt": f"{prompt}\n\nMetrics dump:\n{metrics_dump}",
         "stream": False
     }

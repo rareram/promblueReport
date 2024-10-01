@@ -163,5 +163,5 @@ cython_debug/
 
 # Ouput files
 *.xlsx
-*.csv
+구성관리조회*.csv
 *.conf
