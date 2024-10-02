@@ -13,7 +13,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import textwrap
 
-__version__ = '0.3.5'
+__version__ = '0.3.7'
 
 # 설정 파일 읽기
 config = configparser.ConfigParser()
@@ -279,33 +279,34 @@ async def handle_lunch_command(ack, say):
         ]
     )
 
-@app.action("lunch_recommendation_한식")
-async def handle_korean_food(ack, body, say):
-    await ack()
-    await handle_cuisine_selection(body, say, '한식')
+async def show_progress(body, say):
+    progress_message = await say("메뉴를 번개같이 골라주니께 긴장타봐유.. :thinking_face:")
 
-@app.action("lunch_recommendation_중식")
-async def handle_chinese_food(ack, body, say):
-    await ack()
-    await handle_cuisine_selection(body, say, '중식')
+    # 진행 표시줄 이모지 & 업데이트
+    progress_emojis = [":fork_and_knife:", ":rice:", ":hamburger:", ":pizza:", ":sushi:", ":curry:", ":cut_of_meat:", ":stew:"]
 
-@app.action("lunch_recommendation_일식")
-async def handle_japanese_food(ack, body, say):
-    await ack()
-    await handle_cuisine_selection(body, say, '일식')
-
-@app.action("lunch_recommendation_그냥추천")
-async def handle_random_food(ack, body, say):
-    await ack()
-    await handle_cuisine_selection(body, say, '그냥추천')
+    for _ in range(5):
+        progress = "".join(random.choices(progress_emojis, k=random.randint(2, 6)))
+        await app.client.chat_update(
+            channel=progress_message['channel'],
+            ts=progress_message['ts'],
+            text=f"메뉴를 번개같이 골라주니께 긴장타봐유.. {progress}"
+        )
+        await asyncio.sleep(random.uniform(0.2, 0.7))
+    
+    return progress_message
 
 async def handle_cuisine_selection(body, say, cuisine):
+    progress_message = await show_progress(body, say)
+
     df = read_lunch_csv()
     recommendation = get_random_menu(df, cuisine)
 
     if recommendation:
-        text = f"추천할께유"
-        await say(
+        text = f"추천헐께유"
+        await app.client.chat_update(
+            channel=progress_message['channel'],
+            ts=progress_message['ts'],
             text=text,
             blocks=[
                 {
@@ -331,13 +332,37 @@ async def handle_cuisine_selection(body, say, cuisine):
             text="추천은 맘에 드는겨?",
             blocks=[
                 {
-                    "type": "sections"
+                    "type": "sections",
+                    "text": {"type": "mrkdwn", "text": "추천은 맘에 드는겨?"}
                 }
             ]
         )
-
     else:
-        await say(f"{cuisine} 메뉴가 읍다는디?")
+        await app.client.chat_update(
+            channel=progress_message['channel'],
+            ts=progress_message['ts'],
+            text=f"{cuisine} 메뉴가 읍는디?"
+        )
+
+@app.action("lunch_recommendation_한식")
+async def handle_korean_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '한식')
+
+@app.action("lunch_recommendation_중식")
+async def handle_chinese_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '중식')
+
+@app.action("lunch_recommendation_일식")
+async def handle_japanese_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '일식')
+
+@app.action("lunch_recommendation_그냥추천")
+async def handle_random_food(ack, body, say):
+    await ack()
+    await handle_cuisine_selection(body, say, '그냥추천')
 
 @app.command("/bot_ver")
 async def handle_version_command(ack, say, command):
