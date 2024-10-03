@@ -273,14 +273,14 @@ async def handle_lunch_command(ack, say):
         blocks=[
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": "오늘은 뭐가 땡겨유?"}
+                "text": {"type": "mrkdwn", "text": "어떤 장르로 추천해볼까유?"}
             },
             buttons
         ]
     )
 
 async def show_progress(body, say):
-    progress_message = await say("메뉴를 번개같이 골라주니께 긴장타봐유.. :thinking_face:")
+    progress_message = await say("메뉴 번개같이 골라줄테니께 긴장타봐유.. :thinking_face:")
 
     # 진행 표시줄 이모지 & 업데이트
     progress_emojis = [":fork_and_knife:", ":rice:", ":hamburger:", ":pizza:", ":sushi:", ":curry:", ":cut_of_meat:", ":stew:"]
@@ -290,7 +290,7 @@ async def show_progress(body, say):
         await app.client.chat_update(
             channel=progress_message['channel'],
             ts=progress_message['ts'],
-            text=f"메뉴를 번개같이 골라주니께 긴장타봐유.. {progress}"
+            text=f"메뉴 번개같이 골라줄테니께 긴장타봐유.. {progress}"
         )
         await asyncio.sleep(random.uniform(0.2, 0.7))
     
