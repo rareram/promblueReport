@@ -13,37 +13,59 @@ import logging
 from logging.handlers import RotatingFileHandler
 import textwrap
 
-__version__ = '0.3.7'
+__version__ = '0.4.3'
 
-# 설정 파일 읽기
-config = configparser.ConfigParser()
-config.read('slrepoBot.conf')
+# 설정 파일 읽기 및 로그 포멧 설정
+def setup_config_and_logging():
+    config = configparser.ConfigParser()
+    config.read('slrepoBot.conf')
 
-# 로깅 설정
-log_dir = os.path.join(os.path.dirname(__file__), config['LOGGING']['log_file_dir'])
-os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, config['LOGGING']['log_file'])
-log_max_bytes = config['LOGGING'].getint('log_max_bytes')
-log_backup_count = config['LOGGING'].getint('log_backup_count')
+    log_dir = os.path.join(os.path.dirname(__file__), config['LOGGING']['log_file_dir'])
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, config['LOGGING']['log_file'])
+    log_max_bytes = config['LOGGING'].getint('log_max_bytes')
+    log_backup_count = config['LOGGING'].getint('log_backup_count')
 
-handler = RotatingFileHandler(
-    log_file,
-    maxBytes=log_max_bytes,
-    backupCount=log_backup_count
-)
-logging.basicConfig(
-    handlers=[handler],
-    level=getattr(logging, config['LOGGING']['log_level']),
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+    handler = RotatingFileHandler(
+        log_file,
+        maxBytes=log_max_bytes,
+        backupCount=log_backup_count
+    )
+    logging.basicConfig(
+        handlers=[handler],
+        level=getattr(logging, config['LOGGING']['log_level']),
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
 
-# Slack 앱 토큰, 봇 토큰
+    return config
+
+config = setup_config_and_logging()
+
+# 슬랙 앱 초기화
 SLACK_APP_TOKEN = config['SLACK']['app_token']
 SLACK_BOT_TOKEN = config['SLACK']['bot_token']
-
-# AsyncApp 초기화
 app = AsyncApp(token=SLACK_BOT_TOKEN)
+
+# 데이터 파일 핸들링
+def get_latest_csv_file(directory, prefix, extension):
+    pattern = os.path.join(directory, f"{prefix}*{extension}")
+    files = glob.glob(pattern)
+    if not files:
+        raise FileNotFoundError(f"No files found matching the pattern: {pattern}")
+    return max(files, key=os.path.getctime)
+
+CSV_FILE = get_latest_csv_file(
+    os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
+    config['FILES']['csv_file_prefix'],
+    config['FILES']['csv_file_extension']
+)
+
+LUNCH_CSV_FILE = os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir'], 'babzip.csv')
+
+def read_extdata_file(filename):
+    encoding = 'utf-8' if filename.endswith('babzip.csv') else 'euc-kr'
+    return pd.read_csv(filename, encoding=encoding)
 
 # 큐 설정 및 초기화 (큐 설정을 할 경우 redis 설치 필요)
 if config['QUEUE'].getboolean('use_queue', fallback=False):
@@ -60,95 +82,66 @@ if config['QUEUE'].getboolean('use_queue', fallback=False):
 else:
     queue = None
 
-def get_latest_csv_file(directory, prefix, extension):
-    pattern = os.path.join(directory, f"{prefix}*{extension}")
-    files = glob.glob(pattern)
-    if not files:
-        raise FileNotFoundError(f"No files found matching the pattern: {pattern}")
-    return max(files, key=os.path.getctime)
-
-# CSV 파일 경로 설정
-CSV_FILE = get_latest_csv_file(
-    os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
-    config['FILES']['csv_file_prefix'],
-    config['FILES']['csv_file_extension']
-)
-
-# 점심메뉴 추천
-LUNCH_CSV_FILE = os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir'], 'babzip.csv')
-
-def read_extdata_file(filename):
-    if filename.endswith('babzip.csv'):
-        return pd.read_csv(filename, encoding='utf-8')
-    else:
-        return pd.read_csv(filename, encoding='euc-kr')
-
-def read_lunch_csv():
-    return read_extdata_file(LUNCH_CSV_FILE)
-
-def get_random_menu(df, cuisine=None):
-    if cuisine and cuisine != '그냥추천':
-        df = df[df['구분'] == cuisine]
-
-    if df.empty:
+# 유저그룹 별 권한 제어
+async def get_user_info(client, user_id):
+    try:
+        result = await client.users_info(user=user_id)
+        return result["user"]
+    except Exception as e:
+        logging.error(f"Error fetching user info: {str(e)}")
         return None
+
+def check_permission(user_id, user_email, command):
+    if not user_email:
+        logging.warning(f"User email not available for user {user_id}")
+        user_email = ""
     
-    restaurant = df.sample(n=1).iloc[0]
-    menus = [restaurant['메뉴1'], restaurant['메뉴2'], restaurant['메뉴3']]
-    menu = random.choice([m for m in menus if pd.notna(m)])
+    admin_domains = config['ACCESS_CONTROL'].get('admin_domains', '').split(', ')
+    admin_slack_ids = config['ACCESS_CONTROL'].get('admin_slack_ids', '').split(', ')
+    user_domains = config['ACCESS_CONTROL'].get('user_domains', '').split(', ')
+    user_slack_ids = config['ACCESS_CONTROL'].get('user_slack_ids', '').split(', ')
+    guest_domains = config['ACCESS_CONTROL'].get('guest_domains', '*').split(', ')
+    
+    allowed_groups = config['COMMAND_PERMISSIONS'].get(command, '').split(', ')
+    
+    user_domain = user_email.split('@')[1] if '@' in user_email else ''
+    
+    if 'admin' in allowed_groups and (user_domain in admin_domains or user_id in admin_slack_ids):
+        return 'admin'
+    elif 'user' in allowed_groups and (user_domain in user_domains or user_id in user_slack_ids):
+        return 'user'
+    elif 'guest' in allowed_groups and (guest_domains == ['*'] or user_domain in guest_domains):
+        return 'guest'
+    else:
+        return None
 
-    return {
-        '식당': restaurant['식당'],
-        '메뉴': menu,
-        '링크': restaurant['링크']
-    }
+def filter_data(df, user_group):
+    if user_group == 'admin':
+        logging.info("Admin user, no filtering applied")
+        return df
+    
+    filtered_columns = config['DATA_FILTERING']['filtered_columns'].split(', ')
+    logging.info(f"Filtering columns for {user_group}: {filtered_columns}")
+    
+    for column in filtered_columns:
+        if column in df.columns:
+            df[column] = '***filtered***'
+            logging.info(f"Column {column} filtered")
+        else:
+            logging.warning(f"Column {column} not found in dataframe")
+    
+    return df
 
-# 버튼 생성 함수
-def create_buttons():
-    df = read_lunch_csv()
-    cuisines = df['구분'].unique().tolist()
-    cuisines.append('그냥추천')
-
-    buttons = []
-    for cuisine in cuisines:
-        buttons.append({
-            "type": "button",
-            "text": {"type": "plain_text", "text": cuisine},
-            "value": cuisine,
-            "action_id": f"lunch_recommendation_{cuisine}"
-        })
-
-    return {
-        "type": "actions",
-        "elements": buttons
-    }
-
+# 템플릿 로드
 def load_template(template_name):
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(script_dir, 'slrepoBot.conf')
-        
-        config = configparser.ConfigParser()
-        config.read(config_path, encoding='utf-8')
-        
-        if 'TEMPLATES' not in config:
-            logging.error("TEMPLATES section not found in config file.")
-            return None
-        
         template = config['TEMPLATES'][template_name]
         template = template.replace('##', '\n')
-        template = textwrap.dedent(template)
-        
-        if not template.strip():
-            logging.error("Template {template_name} is empty or contains only whitespace.")
-            return None
-        
-        return template
+        return textwrap.dedent(template)
     except Exception as e:
-        logging.error(f"Failed to load template {template_name}: {str(e)}", exc_info=True)
+        logging.error(f"Failed to load template {template_name}: {str(e)}")
         return None
 
-# 템플릿 설정
 INFO_TEMPLATE = load_template('info_template')
 MNGT_TEMPLATE = load_template('mngt_template')
 
@@ -156,6 +149,7 @@ if INFO_TEMPLATE is None:
     logging.critical("Failed to load INFO_TEMPLATE. Application cannot proceed.")
     raise SystemExit("Critical error: Failed to load template")
 
+# 슬래시 명령어
 async def process_report(ip, time, channel_id, user_id):
     logging.info(f"요청 <@{user_id}> 대상 서버IP {ip}")
     try:
@@ -206,27 +200,41 @@ async def process_report(ip, time, channel_id, user_id):
 @app.command("/server_report")
 async def handle_report_command(ack, say, command):
     await ack()
-    text = command['text']
-    match = re.match(r'(\S+)(?:\s+(\S+))?', text)
-
-    if not match:
-        await say("잘못된 형식입니다. 사용법: /report <IP> [기간옵션; 1d, 7d]")
-        logging.warning(f"잘못된 형식 요청 <@{command['user_id']}> 텍스트: {text}")
+    user_group = check_permission(command['user_id'], command.get('user_email'), 'server_report')
+    if not user_group:
+        await say("명령어 실행 권한이 없습니다.")
         return
     
-    ip = match.group(1)
-    time = match.group(2) if match.group(2) else 'today'
+    match = re.match(r'(\S+)(?:\s+(\S+))?', command['text'])
+    if not match:
+        await say("잘못된 형식입니다. 사용법: /report <IP> [기간옵션; 1d, 7d]")
+        logging.warning(f"잘못된 형식 요청 <@{command['user_id']}> 텍스트: {command['text']}")
+        return
+    
+    ip, time = match.groups()
+    time = time or 'today'
 
     logging.info(f"요청 접수 <@{command['user_id']}> 대상 서버IP {ip} 기간 {time}")
-
     await say(f"<@{command['user_id']}> 보고서 생성 요청을 받았습니다. 처리 중입니다...")
     asyncio.create_task(process_report(ip, time, command['channel_id'], command['user_id']))
 
-async def handle_server_command(ack, say, command, template):
-    await ack()
-    text = command['text']
-    match = re.match(r'(\S+)', text)
+    logging.info(f"Command executed: {command['command']} - User: {command['user_id']} ({command.get('user_email')}) - Group: {user_group} - Params: {command['text']}")
 
+async def handle_server_command(ack, say, command, template, client):
+    await ack()
+    user_id = command['user_id']
+    user_email = command.get('user_email')
+
+    if not user_email:
+        user_info = await get_user_info(client, user_id)
+        user_email = user_info.get('profile', {}).get('email') if user_info else None
+
+    user_group = check_permission(user_id, user_email, command['command'][1:])
+    if not user_group:
+        await say("명령어 실행 권한이 없습니다.")
+        return
+    
+    match = re.match(r'(\S+)', command['text'])
     if not match:
         await say(f"잘못된 형식입니다. 사용법: {command['command']} <IP>")
         return
@@ -235,6 +243,11 @@ async def handle_server_command(ack, say, command, template):
 
     try:
         df = read_extdata_file(CSV_FILE)
+        logging.info(f"Original dataframe columns: {df.columns.tolist()}")
+        
+        df = filter_data(df, user_group)
+        logging.info(f"Filtered dataframe columns: {df.columns.tolist()}")
+        
         server_info = df[(df['사설IP'] == ip) | (df['공인/NAT IP'] == ip)]
         
         if server_info.empty:
@@ -242,27 +255,63 @@ async def handle_server_command(ack, say, command, template):
             return
         
         formatted_info = template
-        for column in server_info.columns:
+        for column, value in server_info.iloc[0].items():
             placeholder = f"{{{column}}}"
             if placeholder in formatted_info:
-                value = server_info[column].values[0]
-                # 칼럼값이 없을때 치환문자
-                value = '-' if pd.isna(value) or value == '' else str(value)
+                value = '·' if pd.isna(value) or value == '' else str(value)
                 formatted_info = formatted_info.replace(placeholder, value)
         
         await say(formatted_info)
-    
     except Exception as e:
         logging.error(f"Error occurred while handling {command['command']} command: {str(e)}", exc_info=True)
         await say(f"서버 정보 조회 중 오류가 발생했습니다: {str(e)}")
+    
+    logging.info(f"Command executed: {command['command']} - User: {user_id} ({user_email}) - Group: {user_group} - Params: {command['text']}")
 
 @app.command("/server_info")
-async def handle_server_info_command(ack, say, command):
-    await handle_server_command(ack, say, command, INFO_TEMPLATE)
+async def handle_server_info_command(ack, say, command, client):
+    await handle_server_command(ack, say, command, INFO_TEMPLATE, client)
 
 @app.command("/server_mngt")
-async def handle_server_mngt_command(ack, say, command):
-    await handle_server_command(ack, say, command, MNGT_TEMPLATE)
+async def handle_server_mngt_command(ack, say, command, client):
+    await handle_server_command(ack, say, command, MNGT_TEMPLATE, client)
+
+# 점심 추천 기능
+def read_lunch_csv():
+    return read_extdata_file(LUNCH_CSV_FILE)
+
+def get_random_menu(df, cuisine=None):
+    if cuisine and cuisine != '그냥추천':
+        df = df[df['구분'] == cuisine]
+
+    if df.empty:
+        return None
+    
+    restaurant = df.sample(n=1).iloc[0]
+    menus = [restaurant['메뉴1'], restaurant['메뉴2'], restaurant['메뉴3']]
+    menu = random.choice([m for m in menus if pd.notna(m)])
+
+    return {
+        '식당': restaurant['식당'],
+        '메뉴': menu,
+        '링크': restaurant['링크']
+    }
+
+def create_buttons():
+    df = read_lunch_csv()
+    cuisines = df['구분'].unique().tolist() + ['그냥추천']
+
+    return {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": cuisine},
+                "value": cuisine,
+                "action_id": f"lunch_recommendation_{cuisine}"
+            } for cuisine in cuisines
+        ]
+    }
 
 @app.command("/조보아씨이리와봐유")
 async def handle_lunch_command(ack, say):
@@ -279,10 +328,8 @@ async def handle_lunch_command(ack, say):
         ]
     )
 
-async def show_progress(body, say):
+async def show_progress(say):
     progress_message = await say("메뉴 번개같이 골라줄테니께 긴장타봐유.. :thinking_face:")
-
-    # 진행 표시줄 이모지 & 업데이트
     progress_emojis = [":fork_and_knife:", ":rice:", ":hamburger:", ":pizza:", ":sushi:", ":curry:", ":cut_of_meat:", ":stew:"]
 
     for _ in range(5):
@@ -292,22 +339,21 @@ async def show_progress(body, say):
             ts=progress_message['ts'],
             text=f"메뉴 번개같이 골라줄테니께 긴장타봐유.. {progress}"
         )
-        await asyncio.sleep(random.uniform(0.2, 0.7))
+        await asyncio.sleep(random.uniform(0.2, 0.6))
     
     return progress_message
 
 async def handle_cuisine_selection(body, say, cuisine):
-    progress_message = await show_progress(body, say)
+    progress_message = await show_progress(say)
 
     df = read_lunch_csv()
     recommendation = get_random_menu(df, cuisine)
 
     if recommendation:
-        text = f"추천헐께유"
         await app.client.chat_update(
             channel=progress_message['channel'],
             ts=progress_message['ts'],
-            text=text,
+            text="추천헐께유",
             blocks=[
                 {
                     "type": "section",
@@ -332,7 +378,7 @@ async def handle_cuisine_selection(body, say, cuisine):
             text="추천은 맘에 드는겨?",
             blocks=[
                 {
-                    "type": "sections",
+                    "type": "section",
                     "text": {"type": "mrkdwn", "text": "추천은 맘에 드는겨?"}
                 }
             ]

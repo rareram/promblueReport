@@ -27,3 +27,20 @@ redis_host = localhost
 redis_port = 6379
 redis_db = 0
 timeout = 300
+
+[ACCESS_CONTROL]
+admin_domains = 
+admin_slack_ids = 
+user_domains = skshieldus.com
+user_slack_ids =
+guest_domains = partner.sk.com, gmail.com
+guest_slack_ids = 
+
+[DATA_FILTERING]
+filtered_columns = 담당자 연락처, HW 관리자, SW 관리자, HW 담당자(정), HW 담당자(부), SW 담당자(정), SW 담당자(부), 유지보수담당자
+
+[COMMAND_PERMISSIONS]
+check_web = admin, user, guest
+server_info = admin, user, guest
+server_mngt = admin
+server_report = admin, user
