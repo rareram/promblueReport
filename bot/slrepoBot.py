@@ -4,16 +4,17 @@ import re
 import subprocess
 import pandas as pd
 import random
+import aiohttp
+import asyncio
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import configparser
 from datetime import datetime
-import asyncio
 import logging
 from logging.handlers import RotatingFileHandler
 import textwrap
 
-__version__ = '0.4.3'
+__version__ = '0.5.2'
 
 # 설정 파일 읽기 및 로그 포멧 설정
 def setup_config_and_logging():
@@ -258,7 +259,7 @@ async def handle_server_command(ack, say, command, template, client):
         for column, value in server_info.iloc[0].items():
             placeholder = f"{{{column}}}"
             if placeholder in formatted_info:
-                value = '·' if pd.isna(value) or value == '' else str(value)
+                value = '-' if pd.isna(value) or value == '' else str(value)
                 formatted_info = formatted_info.replace(placeholder, value)
         
         await say(formatted_info)
@@ -275,6 +276,88 @@ async def handle_server_info_command(ack, say, command, client):
 @app.command("/server_mngt")
 async def handle_server_mngt_command(ack, say, command, client):
     await handle_server_command(ack, say, command, MNGT_TEMPLATE, client)
+
+# 웹 서비스 상태 확인 함수
+async def check_website(url):
+    try:
+        async with aiohttp.ClientSession() as session:
+            start_time = asyncio.get_event_loop().time()
+            async with session.get(url, allow_redirects=True, timeout=5) as response:
+                end_time = asyncio.get_event_loop().time()
+                response_time = end_time - start_time
+                status = response.status
+                return status, response_time
+    except asyncio.TimeoutError:
+        return None, None
+    except Exception as e:
+        logging.error(f"Error checking website {url}: {str(e)}")
+        return None, None
+
+# 웹 서비스 목록 생성 함수
+def create_web_service_buttons(service_type):
+    services = config[f'WEB_SERVICES_{service_type}']
+    return {
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": service_info.split(',')[0].strip()},
+                "value": service_info.split(',')[1].strip(),
+                "action_id": f"check_web_{service_type}_{service_key}"
+            } for service_key, service_info in services.items()
+        ]
+    }
+
+# 웹 서비스 상태 확인 명령어 핸들러
+@app.command("/check_web_b2b")
+@app.command("/check_web_b2c")
+@app.command("/check_web_b2e")
+async def handle_check_web_command(ack, say, command):
+    await ack()
+    service_type = command['command'].split('_')[-1].upper()
+    buttons = create_web_service_buttons(service_type)
+    await say(
+        text=f"{service_type} 웹 서비스 상태를 확인할 서비스를 선택하세요.",
+        blocks=[
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"{service_type} 웹 서비스 상태를 확인할 서비스를 선택하세요."}
+            },
+            buttons
+        ]
+    )
+
+# 웹 서비스 상태 확인 버튼 핸들러
+@app.action(re.compile("check_web_.*"))
+async def handle_all_check_web_action(ack, body, say, logger):
+    await ack()
+    action = body['actions'][0]
+    action_id = action['action_id']
+    url = action['value']
+    service_name = action['text']['text']
+
+    logger.info(f"Action triggered: {action_id}")
+    logger.info(f"Checking website: {service_name} ({url})")
+    
+    status, response_time = await check_website(url)
+    
+    if status == 200:
+        status_emoji = ":large_green_circle:"
+        if response_time < 1:
+            speed_emoji = ":zap:"
+        elif response_time < 3:
+            speed_emoji = ":snail:"
+        else:
+            speed_emoji = ":turtle:"
+        message = f"▪ *상태:* {status_emoji} (*{service_name}* {url} 접속 *정상*)\n▪ *속도:* {speed_emoji} (응답 시간: *{response_time:.2f}* 초)"
+    elif status is not None:
+        emoji = ":large_yellow_circle:"
+        message = f"{emoji} *{service_name}* 서비스 웹({url})가 비정상입니다. 상태 코드: {status}"
+    else:
+        emoji = ":red_circle:"
+        message = f"{emoji} *{service_name}* 서비스 웹({url})에 접근할 수 없습니다."
+    
+    await say(message)
 
 # 점심 추천 기능
 def read_lunch_csv():
@@ -299,7 +382,7 @@ def get_random_menu(df, cuisine=None):
 
 def create_buttons():
     df = read_lunch_csv()
-    cuisines = df['구분'].unique().tolist() + ['그냥추천']
+    cuisines = df['구분'].unique().tolist()
 
     return {
         "type": "actions",
@@ -310,6 +393,13 @@ def create_buttons():
                 "value": cuisine,
                 "action_id": f"lunch_recommendation_{cuisine}"
             } for cuisine in cuisines
+        ] + [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "랜덤 돌려유?"},
+                "value": "random",
+                "action_id": "lunch_recommendation_random"
+            }
         ]
     }
 
@@ -318,7 +408,7 @@ async def handle_lunch_command(ack, say):
     await ack()
     buttons = create_buttons()
     await say(
-        text="메뉴 좀 골라봐유",
+        text="장르 좀 골라봐유",
         blocks=[
             {
                 "type": "section",
@@ -333,7 +423,7 @@ async def show_progress(say):
     progress_emojis = [":fork_and_knife:", ":rice:", ":hamburger:", ":pizza:", ":sushi:", ":curry:", ":cut_of_meat:", ":stew:"]
 
     for _ in range(5):
-        progress = "".join(random.choices(progress_emojis, k=random.randint(2, 6)))
+        progress = "".join(random.choices(progress_emojis, k=random.randint(3, 6)))
         await app.client.chat_update(
             channel=progress_message['channel'],
             ts=progress_message['ts'],
@@ -372,14 +462,31 @@ async def handle_cuisine_selection(body, say, cuisine):
             ]
         )
     
-        await app.client.chat_update(
-            channel=body["channel"]["id"],
-            ts=body["message"]["ts"],
+        await say(
             text="추천은 맘에 드는겨?",
             blocks=[
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "추천은 맘에 드는겨?"}
+                    "fields": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "*추천은 맘에 드는겨?*"
+                        },
+                        {
+                            "type": "mrkdwn",
+                            "text": " "    # 빈칸으로 레이아웃 조정
+                        }
+                    ]
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "한번 더혀?"},
+                            "action_id": "lunch_recommendation_random"
+                        }
+                    ]
                 }
             ]
         )
@@ -405,10 +512,10 @@ async def handle_japanese_food(ack, body, say):
     await ack()
     await handle_cuisine_selection(body, say, '일식')
 
-@app.action("lunch_recommendation_그냥추천")
+@app.action("lunch_recommendation_random")
 async def handle_random_food(ack, body, say):
     await ack()
-    await handle_cuisine_selection(body, say, '그냥추천')
+    await handle_cuisine_selection(body, say, None)
 
 @app.command("/bot_ver")
 async def handle_version_command(ack, say, command):

@@ -44,3 +44,15 @@ check_web = admin, user, guest
 server_info = admin, user, guest
 server_mngt = admin
 server_report = admin, user
+
+[WEB_SERVICES_B2B]
+service1 = 서비스1이름, https://example1.com
+service2 = 서비스2이름, https://example2.com
+
+[WEB_SERVICES_B2C]
+service1 = 서비스1이름, https://example3.com
+service2 = 서비스2이름, https://example4.com
+
+[WEB_SERVICES_B2E]
+service1 = 서비스1이름, https://example5.com
+service2 = 서비스2이름, https://example6.com
