@@ -19,7 +19,7 @@ from PIL import Image
 import io
 import tempfile
 
-__version__ = '0.5.4'
+__version__ = '0.5.6'
 
 # 설정 파일 읽기 및 로그 포멧 설정
 def setup_config_and_logging():
@@ -186,7 +186,8 @@ async def process_report(ip, time, channel_id, user_id):
         
         if output_file and os.path.exists(output_file):
             time_display = "오늘 0시부터 현재까지" if time == 'today' else time
-            await app.client.files_upload(
+            # await app.client.files_upload(
+            await app.client.files_upload_v2(
                 channels=channel_id,
                 file=output_file,
                 initial_comment=f"<@{user_id}> {ip}에 대한 {time_display} 기간의 보고서입니다."
@@ -338,6 +339,23 @@ async def capture_website(url):
     finally:
         driver.quit()
 
+# async def show_capture_progress(client, channel, thread_ts=None):
+async def show_capture_progress(client, channel):
+    progress_message = await client.chat_postMessage(
+        channel=channel,
+        text="_웹사이트를 캡쳐하는 중입니다.._ :hourglass_flowing_sand:"
+        # thread_ts=thread_ts
+    )
+
+    for _ in range(3):         # 3번 업데이트
+        await asyncio.sleep(1) # 1초 대기
+        await client.chat_update(
+            channel=channel,
+            ts=progress_message['ts'],
+            text=f"_웹사이트를 캡처하는 중입니다.._ :hourglass_flowing_sand: {'.' * (_ + 1)}"
+        )
+    
+    return progress_message
 
 # 웹 서비스 상태 확인 명령어 핸들러
 @app.command("/check_web_b2b")
@@ -398,22 +416,34 @@ async def handle_all_check_web_action(ack, body, say, logger):
         emoji = ":red_circle:"
         message = f"{emoji} *{service_name}* 서비스 웹({url})에 접근할 수 없습니다."
     
-    await say(message)
+    status_message = await say(message)
 
     if capture_mode:
         try:
-            # screenshot_path = await capture_website(url)
+            # progress_message = await show_capture_progress(app.client, body['channel']['id'], status_message['ts'])
+            progress_message = await show_capture_progress(app.client, body['channel']['id'])
+            
             screenshot_data = await capture_website(url)
+
             await app.client.files_upload_v2(
-                channels=body['channel']['id'],
-                # file=screenshot_path,
+                channel=body['channel']['id'],
                 file=screenshot_data,
                 filename=f"{service_name}_screenshot.png",
                 title=f"{service_name} 캡처 이미지",
                 initial_comment=f"{service_name} ({url})의 캡처 이미지입니다."
+                # thread_ts=status_message['ts']
             )
+
+            # 캡처 완료 메시지로 업데이트
+            await app.client.chat_update(
+                channel=body['channel']['id'],
+                ts=progress_message['ts'],
+                text=f"웹사이트 캡처가 완료되었습니다. :white_check_mark:"
+            )
+
         except Exception as e:
             logger.error(f"Failed to capture website: {str(e)}")
+            # await say(f"웹사이트 캡처 중 오류가 발생했습니다: {str(e)}", thread_ts=status_message['ts'])
             await say(f"웹사이트 캡처 중 오류가 발생했습니다: {str(e)}")
 
 # 점심 추천 기능
@@ -594,4 +624,5 @@ async def main():
             await app.client.session.close()
 
 if __name__ == "__main__":
+    print(f"Starting slrepoBot v{__version__}")
     asyncio.run(main())
