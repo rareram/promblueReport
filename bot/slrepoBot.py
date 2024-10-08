@@ -13,8 +13,13 @@ from datetime import datetime
 import logging
 from logging.handlers import RotatingFileHandler
 import textwrap
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from PIL import Image
+import io
+import tempfile
 
-__version__ = '0.5.2'
+__version__ = '0.5.4'
 
 # 설정 파일 읽기 및 로그 포멧 설정
 def setup_config_and_logging():
@@ -294,7 +299,7 @@ async def check_website(url):
         return None, None
 
 # 웹 서비스 목록 생성 함수
-def create_web_service_buttons(service_type):
+def create_web_service_buttons(service_type, capture_mode=False):
     services = config[f'WEB_SERVICES_{service_type}']
     return {
         "type": "actions",
@@ -302,26 +307,61 @@ def create_web_service_buttons(service_type):
             {
                 "type": "button",
                 "text": {"type": "plain_text", "text": service_info.split(',')[0].strip()},
-                "value": service_info.split(',')[1].strip(),
+                "value": f"{service_info.split(',')[1].strip()}|{capture_mode}",
                 "action_id": f"check_web_{service_type}_{service_key}"
             } for service_key, service_info in services.items()
         ]
     }
 
+# 웹 서비스 캡처
+async def capture_website(url):
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+
+    driver = webdriver.Chrome(options=options)
+    try:
+        driver.get(url)
+        driver.set_window_size(1920, 1080)
+        screenshot = driver.get_screenshot_as_png()
+        image = Image.open(io.BytesIO(screenshot))
+
+        # with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+            # image.save(temp_file.name)
+            # return temp_file.name
+        with io.BytesIO() as output:
+            image.save(output, format='PNG')
+            output.seek(0)
+            return output.getvalue()
+
+    finally:
+        driver.quit()
+
+
 # 웹 서비스 상태 확인 명령어 핸들러
 @app.command("/check_web_b2b")
 @app.command("/check_web_b2c")
 @app.command("/check_web_b2e")
-async def handle_check_web_command(ack, say, command):
+async def handle_check_web_command(ack, say, command, logger):
     await ack()
     service_type = command['command'].split('_')[-1].upper()
-    buttons = create_web_service_buttons(service_type)
+
+    capture_mode = 'capture' in command['text'].lower()
+
+    buttons = create_web_service_buttons(service_type, capture_mode)
+    logger.info(f"Created buttons for {service_type}: {buttons}")
+
+    message = f"{service_type} 상태를 확인할 웹서비스를 선택하세요."
+    if capture_mode:
+        message += " (캡처 모드)"
+    
     await say(
-        text=f"{service_type} 웹 서비스 상태를 확인할 서비스를 선택하세요.",
+        text=message,
         blocks=[
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"{service_type} 웹 서비스 상태를 확인할 서비스를 선택하세요."}
+                "text": {"type": "mrkdwn", "text": message}
             },
             buttons
         ]
@@ -333,7 +373,8 @@ async def handle_all_check_web_action(ack, body, say, logger):
     await ack()
     action = body['actions'][0]
     action_id = action['action_id']
-    url = action['value']
+    url, capture_mode = action['value'].split('|')
+    capture_mode = capture_mode.lower() == 'true'
     service_name = action['text']['text']
 
     logger.info(f"Action triggered: {action_id}")
@@ -358,6 +399,22 @@ async def handle_all_check_web_action(ack, body, say, logger):
         message = f"{emoji} *{service_name}* 서비스 웹({url})에 접근할 수 없습니다."
     
     await say(message)
+
+    if capture_mode:
+        try:
+            # screenshot_path = await capture_website(url)
+            screenshot_data = await capture_website(url)
+            await app.client.files_upload_v2(
+                channels=body['channel']['id'],
+                # file=screenshot_path,
+                file=screenshot_data,
+                filename=f"{service_name}_screenshot.png",
+                title=f"{service_name} 캡처 이미지",
+                initial_comment=f"{service_name} ({url})의 캡처 이미지입니다."
+            )
+        except Exception as e:
+            logger.error(f"Failed to capture website: {str(e)}")
+            await say(f"웹사이트 캡처 중 오류가 발생했습니다: {str(e)}")
 
 # 점심 추천 기능
 def read_lunch_csv():
@@ -526,7 +583,15 @@ async def handle_version_command(ack, say, command):
 
 async def main():
     handler = AsyncSocketModeHandler(app, SLACK_APP_TOKEN)
-    await handler.start_async()
+    try:
+        await handler.start_async()
+        logging.info("slrepoBot v{__version__} is running!")
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await handler.close()
+        if app.client.session:
+            await app.client.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
