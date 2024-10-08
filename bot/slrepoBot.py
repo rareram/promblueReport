@@ -19,7 +19,7 @@ from PIL import Image
 import io
 import tempfile
 
-__version__ = '0.5.6'
+__version__ = '0.5.7'
 
 # 설정 파일 읽기 및 로그 포멧 설정
 def setup_config_and_logging():
@@ -361,6 +361,7 @@ async def show_capture_progress(client, channel):
 @app.command("/check_web_b2b")
 @app.command("/check_web_b2c")
 @app.command("/check_web_b2e")
+@app.command("/check_web_blue")
 async def handle_check_web_command(ack, say, command, logger):
     await ack()
     service_type = command['command'].split('_')[-1].upper()
