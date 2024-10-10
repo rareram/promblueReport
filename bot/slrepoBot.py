@@ -19,7 +19,7 @@ from PIL import Image
 import io
 import tempfile
 
-__version__ = '0.5.6'
+__version__ = '0.5.13'
 
 # 설정 파일 읽기 및 로그 포멧 설정
 def setup_config_and_logging():
@@ -31,6 +31,12 @@ def setup_config_and_logging():
     log_file = os.path.join(log_dir, config['LOGGING']['log_file'])
     log_max_bytes = config['LOGGING'].getint('log_max_bytes')
     log_backup_count = config['LOGGING'].getint('log_backup_count')
+
+    # 스레드 옵션
+    config['THREAD_OPTIONS'] = {
+        'check_web_thread': config.getboolean('THREAD_OPTIONS', 'check_web_thread', fallback=False),
+        'server_report_thread': config.getboolean('THREAD_OPTIONS', 'server_report_thread')
+    }
 
     handler = RotatingFileHandler(
         log_file,
@@ -156,7 +162,8 @@ if INFO_TEMPLATE is None:
     raise SystemExit("Critical error: Failed to load template")
 
 # 슬래시 명령어
-async def process_report(ip, time, channel_id, user_id):
+# async def process_report(ip, time, channel_id, user_id):
+async def process_report(ip, time, channel_id, user_id, thread_ts=None):
     logging.info(f"요청 <@{user_id}> 대상 서버IP {ip}")
     try:
         out_dir = os.path.join(os.path.dirname(__file__), config['FILES']['out_file_dir'])
@@ -190,12 +197,21 @@ async def process_report(ip, time, channel_id, user_id):
             await app.client.files_upload_v2(
                 channels=channel_id,
                 file=output_file,
-                initial_comment=f"<@{user_id}> {ip}에 대한 {time_display} 기간의 보고서입니다."
+                initial_comment=f"<@{user_id}> {ip}에 대한 {time_display} 기간의 보고서입니다.",
+                thread_ts=thread_ts
             )
-            await app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서가 성공적으로 업로드되었습니다.")
+            await app.client.chat_postMessage(
+                channel=channel_id,
+                text=f"<@{user_id}> 보고서가 성공적으로 업로드되었습니다.",
+                thread_ts=thread_ts
+            )
             logging.info(f"완료 <@{user_id}> 대상 서버IP {ip}")
         else:
-            await app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서 파일을 생성하지 못했습니다.")
+            await app.client.chat_postMessage(
+                channel=channel_id,
+                text=f"<@{user_id}> 보고서 파일을 생성하지 못했습니다.",
+                thread_ts=thread_ts
+            )
             logging.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 파일 생성 실패")
     except subprocess.TimeoutExpired:
         await app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서 생성 시간이 초과되었습니다.")
@@ -222,8 +238,12 @@ async def handle_report_command(ack, say, command):
     time = time or 'today'
 
     logging.info(f"요청 접수 <@{command['user_id']}> 대상 서버IP {ip} 기간 {time}")
-    await say(f"<@{command['user_id']}> 보고서 생성 요청을 받았습니다. 처리 중입니다...")
-    asyncio.create_task(process_report(ip, time, command['channel_id'], command['user_id']))
+
+    use_thread = config['THREAD_OPTIONS'].getboolean('server_report_thread', fallback=False)
+    initial_message = await say(f"<@{command['user_id']}> 보고서 생성 요청을 받았습니다. 처리 중입니다...")
+
+    thread_ts = initial_message['ts'] if use_thread else None
+    asyncio.create_task(process_report(ip, time, command['channel_id'], command['user_id'], thread_ts))
 
     logging.info(f"Command executed: {command['command']} - User: {command['user_id']} ({command.get('user_email')}) - Group: {user_group} - Params: {command['text']}")
 
@@ -339,12 +359,11 @@ async def capture_website(url):
     finally:
         driver.quit()
 
-# async def show_capture_progress(client, channel, thread_ts=None):
-async def show_capture_progress(client, channel):
+async def show_capture_progress(client, channel, thread_ts):
     progress_message = await client.chat_postMessage(
         channel=channel,
-        text="_웹사이트를 캡쳐하는 중입니다.._ :hourglass_flowing_sand:"
-        # thread_ts=thread_ts
+        text="_웹사이트를 캡쳐하는 중입니다.._ :hourglass_flowing_sand:",
+        thread_ts=thread_ts
     )
 
     for _ in range(3):         # 3번 업데이트
@@ -361,6 +380,7 @@ async def show_capture_progress(client, channel):
 @app.command("/check_web_b2b")
 @app.command("/check_web_b2c")
 @app.command("/check_web_b2e")
+@app.command("/check_web_blue")
 async def handle_check_web_command(ack, say, command, logger):
     await ack()
     service_type = command['command'].split('_')[-1].upper()
@@ -372,9 +392,11 @@ async def handle_check_web_command(ack, say, command, logger):
 
     message = f"{service_type} 상태를 확인할 웹서비스를 선택하세요."
     if capture_mode:
-        message += " (캡처 모드)"
+        message += " (캡처 모드 :camera_with_flash:)"
     
-    await say(
+    use_thread = config['THREAD_OPTIONS']['check_web_thread']
+
+    initial_message = await say(
         text=message,
         blocks=[
             {
@@ -384,6 +406,8 @@ async def handle_check_web_command(ack, say, command, logger):
             buttons
         ]
     )
+
+    return initial_message['ts'] if use_thread else None
 
 # 웹 서비스 상태 확인 버튼 핸들러
 @app.action(re.compile("check_web_.*"))
@@ -405,9 +429,9 @@ async def handle_all_check_web_action(ack, body, say, logger):
         if response_time < 1:
             speed_emoji = ":zap:"
         elif response_time < 3:
-            speed_emoji = ":snail:"
-        else:
             speed_emoji = ":turtle:"
+        else:
+            speed_emoji = ":sloth:"
         message = f"▪ *상태:* {status_emoji} (*{service_name}* {url} 접속 *정상*)\n▪ *속도:* {speed_emoji} (응답 시간: *{response_time:.2f}* 초)"
     elif status is not None:
         emoji = ":large_yellow_circle:"
@@ -417,34 +441,42 @@ async def handle_all_check_web_action(ack, body, say, logger):
         message = f"{emoji} *{service_name}* 서비스 웹({url})에 접근할 수 없습니다."
     
     status_message = await say(message)
+    # thread_ts = status_message['ts'] 
 
     if capture_mode:
-        try:
-            # progress_message = await show_capture_progress(app.client, body['channel']['id'], status_message['ts'])
-            progress_message = await show_capture_progress(app.client, body['channel']['id'])
-            
-            screenshot_data = await capture_website(url)
+        use_thread = config['THREAD_OPTIONS'].getboolean('check_web_thread', fallback=False)
+        thread_ts = status_message['ts'] if use_thread else None
+        asyncio.create_task(capture_website_task(app.client, body['channel']['id'], service_name, url, thread_ts))
 
-            await app.client.files_upload_v2(
-                channel=body['channel']['id'],
-                file=screenshot_data,
-                filename=f"{service_name}_screenshot.png",
-                title=f"{service_name} 캡처 이미지",
-                initial_comment=f"{service_name} ({url})의 캡처 이미지입니다."
-                # thread_ts=status_message['ts']
-            )
+async def capture_website_task(client, channel_id, service_name, url, thread_ts):
+    try:
+        progress_message = await show_capture_progress(client, channel_id, thread_ts)
+        
+        screenshot_data = await capture_website(url)
 
-            # 캡처 완료 메시지로 업데이트
-            await app.client.chat_update(
-                channel=body['channel']['id'],
-                ts=progress_message['ts'],
-                text=f"웹사이트 캡처가 완료되었습니다. :white_check_mark:"
-            )
+        await client.files_upload_v2(
+            channel=channel_id,
+            file=screenshot_data,
+            filename=f"{service_name}_screenshot.png",
+            title=f"{service_name} 캡처 이미지",
+            initial_comment=f"{service_name} ({url})의 캡처 이미지입니다.",
+            thread_ts=thread_ts
+        )
 
-        except Exception as e:
-            logger.error(f"Failed to capture website: {str(e)}")
-            # await say(f"웹사이트 캡처 중 오류가 발생했습니다: {str(e)}", thread_ts=status_message['ts'])
-            await say(f"웹사이트 캡처 중 오류가 발생했습니다: {str(e)}")
+        # 캡처 완료 메시지로 업데이트
+        await app.client.chat_update(
+            channel=channel_id,
+            ts=progress_message['ts'],
+            text=f"_웹사이트 캡처가 완료되었습니다._ :white_check_mark:"
+        )
+
+    except Exception as e:
+        logging.error(f"Failed to capture website: {str(e)}")
+        await client.chat_postMessage(
+            channel=channel_id,
+            text=f"웹사이트 캡처 중 오류가 발생했습니다: {str(e)}",
+            thread_ts=thread_ts
+        )
 
 # 점심 추천 기능
 def read_lunch_csv():

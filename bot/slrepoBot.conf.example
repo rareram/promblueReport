@@ -28,6 +28,11 @@ redis_port = 6379
 redis_db = 0
 timeout = 300
 
+[THREAD_OPTIONS]
+# check_web_thread = true
+check_web_thread = false
+server_report_thread = true
+
 [ACCESS_CONTROL]
 admin_domains = 
 admin_slack_ids = 
@@ -40,11 +45,15 @@ guest_slack_ids =
 filtered_columns = 담당자 연락처, HW 관리자, SW 관리자, HW 담당자(정), HW 담당자(부), SW 담당자(정), SW 담당자(부), 유지보수담당자
 
 [COMMAND_PERMISSIONS]
-check_web = admin, user, guest
+check_web_b2b = admin, user
+check_web_b2c = admin, user, guest
+check_web_b2e = admin, user
+check_web_blue = admin, user
 server_info = admin, user, guest
-server_mngt = admin
+server_mngt = admin, user
 server_report = admin, user
 
+# [WEB_SERVICES_*] 형식을 맞춰주고, 슬랙에서 슬래시 명령어 구분하면 그룹 나누기 가능
 [WEB_SERVICES_B2B]
 service1 = 서비스1이름, https://example1.com
 service2 = 서비스2이름, https://example2.com
@@ -56,3 +65,7 @@ service2 = 서비스2이름, https://example4.com
 [WEB_SERVICES_B2E]
 service1 = 서비스1이름, https://example5.com
 service2 = 서비스2이름, https://example6.com
+
+[WEB_SERVICES_BLUE]
+service1 = 서비스1이름, https://example7.com
+service2 = 서비스2이름, https://example8.com
