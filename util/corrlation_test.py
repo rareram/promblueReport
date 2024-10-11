@@ -15,11 +15,11 @@ def query_prometheus(query):
     return results
 
 # Target Host 1 의 CPU 사용량 데이터를 가져오기
-query_host_20 = 'node_cpu_seconds_total{instance="localhost"}'
+query_host_20 = 'node_cpu_seconds_total{instance="10.10.10.20"}'
 data_host_20 = query_prometheus(query_host_20)
 
 # Target Host 2 호스트의 CPU 사용량 데이터를 가져오기
-query_host_30 = 'node_cpu_seconds_total{instance="localhost"}'
+query_host_30 = 'node_cpu_seconds_total{instance="10.10.10.30"}'
 data_host_30 = query_prometheus(query_host_30)
 
 # 데이터를 데이터프레임으로 변환

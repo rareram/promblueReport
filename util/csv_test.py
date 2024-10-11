@@ -33,10 +33,9 @@ def format_server_info(template, server_info):
     return formatted_info
 
 def main():
-    config_path = 'slrepoBot.conf'
-    csv_path = '../data/구성관리조회 (서버 관리자용)_20240923102100.csv'
-    # ip = '10.10.10.10'
-    ip = '175.123.252.167'
+    config_path = '../bot/slrepoBot.conf'
+    csv_path = '../data/구성관리조회_20240901000001.csv'
+    ip = '10.10.10.10'
 
     try:
         df = load_csv(csv_path)
