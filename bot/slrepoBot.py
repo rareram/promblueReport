@@ -11,17 +11,18 @@ from rq import Queue
 # 슬래시 명령어 모듈
 import cmd_check_web   # /check_web_b2b, /check_web_b2c, /check_web_b2e, /check_web_blue
 import cmd_server      # /server_info, /server_mngt, /server_report
-import cmd_fun         # /조보아씨이리와봐유
+import cmd_fun         # 
 # import cmd_check_api   # TODO /check_api ...
 # import cmd_check_db    # TODO /check_db ...
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.4 (2024.10.11)'
+__version__ = '0.6.9 (2024.10.14)'
 
 class slrepoBot:
     def __init__(self):
         self.config = self.setup_config_and_logging()
+        # self.logger = logging.getLogger(__name__)
         self.app = AsyncApp(token=self.config['SLACK']['bot_token'])
         self.queue = self.setup_queue()
         self.init_modules()
@@ -75,6 +76,7 @@ class slrepoBot:
     # 권한 제어 로직
     def check_permission(self, user_id, user_email, command):
         if not user_email:
+            # self.logger.warning(f"User email not available for user {user_id}")
             logging.warning(f"User email not available for user {user_id}")
             user_email = ""
         
@@ -88,13 +90,28 @@ class slrepoBot:
         
         user_domain = user_email.split('@')[1] if '@' in user_email else ''
         
+        # self.logger.debug(f"Checking permission for user_id: {user_id}, user_email: {user_email}, command: {command}")
+        logging.debug(f"Checking permission for user_id: {user_id}, user_email: {user_email}, command: {command}")
+        # self.logger.debug(f"Admin domains: {admin_domains}, Admin Slack IDs: {admin_slack_ids}")
+        logging.debug(f"Admin domains: {admin_domains}, Admin Slack IDs: {admin_slack_ids}")
+        # self.logger.debug(f"User domain: {user_domain}, Allowed groups: {allowed_groups}")
+        logging.debug(f"User domain: {user_domain}, Allowed groups: {allowed_groups}")
+
         if 'admin' in allowed_groups and (user_domain in admin_domains or user_id in admin_slack_ids):
+            # self.logger.info(f"Admin permission granted to user {user_id} for command {command}")
+            logging.info(f"Admin permission granted to user {user_id} for command {command}")
             return 'admin'
         elif 'user' in allowed_groups and (user_domain in user_domains or user_id in user_slack_ids):
+            # self.logger.info(f"User permission granted to user {user_id} for command {command}")
+            logging.info(f"User permission granted to user {user_id} for command {command}")
             return 'user'
         elif 'guest' in allowed_groups and (guest_domains == ['*'] or user_domain in guest_domains):
+            # self.logger.info(f"Guest permission granted to user {user_id} for command {command}")
+            logging.info(f"Guest permission granted to user {user_id} for command {command}")
             return 'guest'
         else:
+            # self.logger.warning(f"Permission denied to user {user_id} for command {command}")
+            logging.warning(f"Permission denied to user {user_id} for command {command}")
             return None
 
     # csv 칼럼(개인정보) 데이터 필터링
@@ -118,8 +135,16 @@ class slrepoBot:
     # 각 모듈의 초기화 함수 호출
     def init_modules(self):
         cmd_check_web.init(self.app, self.config)
-        cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data)
+
+        try:
+            self.ip_pattern = self.config['BUTTON_GENERATION']['ip_pattern']
+        except KeyError:
+            # self.logger.error("'BUTTON_GENERATION' section or 'ip_pattern' key not found in config")
+            logging.error("'BUTTON_GENERATION' section or 'ip_pattern' key not found in config")
+            self.ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'  # Default IP pattern
+        cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data, self.ip_pattern)
         cmd_fun.init(self.app, self.config)
+
 
     def register_commands(self):
         self.app.command("/bot_ver")(self.handle_version_command)
