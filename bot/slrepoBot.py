@@ -17,7 +17,7 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.15 (2024.10.16)'
+__version__ = '0.6.16 (2024.10.16)'
 
 class slrepoBot:
     def __init__(self):
@@ -148,13 +148,13 @@ class slrepoBot:
         await ack()
         if command['text']:
             await say(f"참고: '/bot_ver' 명령어는 추가 파라미터를 필요로 하지 않습니다. 입력하신 '{command['text']}'는 무시됩니다.")
-        await say(f"현재 슬리포봇(slrepoBot) 버전: v{__version__}")
+        await say(f"현재 채찍PT봇 버전: v{__version__}")
 
     async def run(self):
         handler = AsyncSocketModeHandler(self.app, self.config['SLACK']['app_token'])
         try:
             await handler.start_async()
-            logging.info(f"slrepoBot v{__version__} is running!")
+            logging.info(f"채찍PT봇 v{__version__} 구동중!")
             while True:
                 await asyncio.sleep(3600)
         finally:
@@ -168,5 +168,5 @@ async def main():
     await bot.run()
 
 if __name__ == "__main__":
-    print(f"Starting slrepoBot v{__version__}")
+    print(f"Starting 채찍PT봇 v{__version__}")
     asyncio.run(main())

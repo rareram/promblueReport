@@ -197,6 +197,7 @@ class ServerManager:
 
         channel_id = command['channel_id']
         message_limit = int(self.config.get('BUTTON_GENERATION', 'message_limit', fallback=10))
+        extract_ips_limit = int(self.config.get('BUTTON_GENERATION', 'extract_ips_limit', fallback=5))
 
         try:
             result = await client.conversations_history(channel=channel_id, limit=message_limit)
@@ -237,11 +238,12 @@ class ServerManager:
                 blocks=[
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* :mag_right:"}
+                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* (limit: *{extract_ips_limit}*) :mag_right:"}
                     },
                     {
                         "type": "actions",
-                        "elements": buttons[:5]  # Limit to 5 buttons
+                        # "elements": buttons[:5]  # Limit to 5 buttons
+                        "elements": buttons[:7]  # Limit to 7 buttons
                     }
                 ]
             )

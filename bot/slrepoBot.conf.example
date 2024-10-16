@@ -53,7 +53,7 @@ timeout = 300
 [TEMPLATES]
 info_template = * *ID:* _*{ID}*_ / _{분류}_##* *서비스:* _{서비스}_ ({운영상태})##* *역할:* _{IT구성정보명}_, _{자산 설명}_##* *서버정보:* _{Hostname}_ / _{설치 위치(Region)}_ / 이중화 ({서버 이중화 여부})##  - 공인/NAT IP: _{공인/NAT IP}_##  - 사설 IP: _{사설IP}_##  - VIP: _{VIP}_, H/A IP: _{HA IP}_, MGMT IP: _{MGMT IP}_##* *시스템 정보:*##  - OS: _{서버 OS}_ _{서버 OS Version}_##  - CPU: _{CPU Type}_ _{CPU Core 수}_##  - 메모리: _{Memory}_##  - 디스크: _{디스크 용량}_##  - DB ({DB 사용여부}): _{DB Platform}_ _{DB Version}_ 이중화({DB 이중화 여부})##  - WEB ({WEB 사용여부}): _{WEB Platform}_ _{WEB Version}_ 이중화({WEB 이중화 여부})##  - WAS ({WAS 사용여부}): _{WAS Platform}_ _{WAS Version}_ 이중화({WAS 이중화 여부})##  - 모니터링({모니터링 Tool 사용 여부}): _{모니터링 Tool 종류}_, Agent 설치 ({Agent 설치 여부})
 mngt_template = * *ID:* _*{ID}*_ / _{사설IP}_, _{공인/NAT IP}_##* *서비스:* _{서비스}_ ({운영상태})##* *역할:* _{IT구성정보명}_, _{자산 설명}_##* *관리부서:* _{관리부서}_ ##  - HW: _{HW 소유부서}_, 관리자: _{HW 관리자}_, 담당자(정/부): _{HW 담당자(정)}_/_{HW 담당자(부)}_##  - SW: _{SW 소유부서}_, 관리자: _{SW 관리자}_, 담당자(정/부): _{SW 담당자(정)}_/_{SW 담당자(부)}_##* *유지보수({유지보수여부}):*  _{유지보수 업체}_##  - 계약기간: _{유지보수 시작일}_ ~ _{유지보수 종료일}_##  - 담당자: _{유지보수담당자}_ {담당자 연락처}##  - 지원형태: ({지원 형태}) / 24/7서비스 ({24/7 서비스지원}) / 점검 ({점검 횟수}) / 원격 ({원격지원 가능여부})##* *등록정보:* CMDB 작성률: _*{진척율(%%)}%%*_##  - 도입년월: _{도입년월}_##  - CMDB 등록: _{등록일}_ / 갱신: _*{최종 변경일시}*_ ##* *보안 정보:*##  - EQST VM ({EQST VM설치 여부}) / 백신 ({백신 설치 여부}) / Tanium ({Tanium 설치 여부}) / 서버 접근제어 ({서버 접근제어 연동 여부}) / DB 접근제어 ({DB 접근제어 연동 여부})
-voca_template = * *ID:* _*{ID}*_ / _{운영상태}-{분류}_##* *서비스:* _{서비스}_##* *역할:* _{IT구성정보명}_, *설명:* _{자산 설명}_##* *Hostname:* _{Hostname}_ / *위치:* _{설치 위치(Region)}_ 
+voca_template = * *ID:* _*{ID}*_ / *Hostname:* _{Hostname}_ / *IP:* _{사설IP}_ _{공인/NAT IP}_##* *서비스:* _{서비스}_ _({운영상태}-{분류})_ / *위치:* _{설치 위치(Region)}_##* *역할:* _{IT구성정보명}_ / *설명:* _{자산 설명}_ 
 
 [BUTTON_GENERATION]
 # columns_to_search = 사설IP, 공인/NAT IP, Hostname
@@ -61,7 +61,8 @@ ip_pattern = \b(?:\d{1,3}\.){3}\d{1,3}\b
 # hostname_pattern = \b[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b
 hostname_pattern = ■\s*호스트\s*:\s*(\S+)
 # message_format = \* ([^:]+)\s*:\s*(.+)
-message_limit = 20
+message_limit = 10
+extract_ips_limit = 5
 
 [DATA_FILTERING]
 filtered_columns = 담당자 연락처, HW 관리자, SW 관리자, HW 담당자(정), HW 담당자(부), SW 담당자(정), SW 담당자(부), 유지보수담당자
