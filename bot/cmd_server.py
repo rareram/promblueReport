@@ -9,7 +9,7 @@ import glob
 from datetime import datetime
 
 class ServerManager:
-    def __init__(self, app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern):
+    def __init__(self, app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern, hostname_pattern):
         self.app = app
         self.config = config
         self.queue = queue
@@ -17,6 +17,7 @@ class ServerManager:
         self.get_user_info = get_user_info
         self.filter_data = filter_data
         self.ip_pattern = re.compile(ip_pattern)
+        self.hostname_pattern = re.compile(hostname_pattern)
         self.logger = logging.getLogger(__name__)
         self.CSV_FILE = self.get_latest_csv_file(
             os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
@@ -29,7 +30,11 @@ class ServerManager:
         app.command("/server_info")(self.handle_server_info_command)
         app.command("/server_mngt")(self.handle_server_mngt_command)
         app.command("/server_button")(self.handle_server_button_command)
-        app.action("server_info_button")(self.handle_server_info_button)
+        # app.action("server_info_button")(self.handle_server_info_button)
+        app.action(re.compile(r"^server_info_button_\d+$"))(self.handle_server_info_button)
+    
+        self.logger.info("ServerManager initialized with action handlers")
+        self.logger.debug(r"Registered action handler for pattern: ^server_info_button_\d+$")
 
     def get_latest_csv_file(self, directory, prefix, extension):
         pattern = os.path.join(directory, f"{prefix}*{extension}")
@@ -197,26 +202,38 @@ class ServerManager:
             result = await client.conversations_history(channel=channel_id, limit=message_limit)
             messages = result['messages']
 
-            extracted_ips = set()
+            # extracted_ips = set()
+            extracted_info = set()
             for message in messages:
                 text = message.get('text', '')
-                extracted_ips.update(self.ip_pattern.findall(text))
+                ip_matches = self.ip_pattern.findall(text)
+                host_matches = self.hostname_pattern.findall(text)
+                # extracted_ips.update(self.ip_pattern.findall(text))
+                extracted_info.update(ip_matches)
+                extracted_info.update(host_matches)
 
-            if not extracted_ips:
-                await say(f"상위 {message_limit}개의 메시지에서 추출 가능한 IP가 없습니다.")
+            # if not extracted_ips:
+            if not extracted_info:
+                await say(f"상위 {message_limit}개의 메시지에서 추출 가능한 IP 또는 Hostname이 없습니다.")
                 return
 
+            df = self.read_extdata_file(self.CSV_FILE)
             buttons = []
-            for index, ip in enumerate(extracted_ips):
-                buttons.append({
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": ip},
-                    "value": ip,
-                    "action_id": "server_info_button_{index}"
-                })
+            # for index, ip in enumerate(extracted_ips):
+            for index, info in enumerate(extracted_info):
+                ip = self.get_ip_from_info(info, df)
+                if ip:
+                    action_id = f"server_info_button_{index}"
+                    buttons.append({
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": ip},
+                        "value": ip,
+                        "action_id": action_id
+                    })
+                    self.logger.debug(f"Created button with action_id: {action_id}")
 
             await say(
-                text=f"상위 {message_limit}개의 메시지에서 추출한 IP:",
+                text=f"상위 {message_limit}개의 메시지에서 추출한 IP 또는 Hostname:",
                 blocks=[
                     {
                         "type": "section",
@@ -228,13 +245,24 @@ class ServerManager:
                     }
                 ]
             )
-
         except Exception as e:
-            self.logger.error(f"Error in handle_server_button_command: {str(e)}")
-            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}")
+            self.logger.error(f"Error in handle_server_button_command: {str(e)}", exc_info=True)
+            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}") 
+
+    def get_ip_from_info(self, info, df):
+        if self.ip_pattern.match(info):
+            return info
+        else:
+            matching_row = df[df['Hostname'] == info]
+            if not matching_row.empty:
+                return matching_row['사설IP'].iloc[0] or matching_row['공인/NAT IP'].iloc[0]
+        return None
 
     async def handle_server_info_button(self, ack, body, say):
         await ack()
+        action_id = body['actions'][0]['action_id']
+        # self.logger.info(f"Handling server info button action: {body['actions'][0]['action_id']}")
+        self.logger.info(f"Handling server info button action: {action_id}")
         ip = body['actions'][0]['value']
         user_id = body['user']['id']
         user_email = body['user'].get('email')
@@ -271,5 +299,5 @@ class ServerManager:
                 formatted_info = formatted_info.replace(placeholder, value)
         return formatted_info
 
-def init(app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern):
-    ServerManager(app, config, queue, check_permission, get_user_info, filter_data, ip_pattern)
+def init(app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern, hostname_pattern):
+    return ServerManager(app, config, queue, check_permission, get_user_info, filter_data, ip_pattern, hostname_pattern)
