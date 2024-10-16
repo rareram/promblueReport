@@ -240,7 +240,9 @@ class ServerManager:
 
     async def handle_server_info_button(self, ack, body, say):
         await ack()
-        self.logger.info(f"Handling server info button action: {body['actions'][0]['action_id']}")
+        action_id = body['actions'][0]['action_id']
+        # self.logger.info(f"Handling server info button action: {body['actions'][0]['action_id']}")
+        self.logger.info(f"Handling server info button action: {action_id}")
         ip = body['actions'][0]['value']
         user_id = body['user']['id']
         user_email = body['user'].get('email')
