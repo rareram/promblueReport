@@ -17,7 +17,7 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.10 (2024.10.16)'
+__version__ = '0.6.11 (2024.10.16)'
 
 class slrepoBot:
     def __init__(self):
@@ -144,6 +144,8 @@ class slrepoBot:
             self.ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'  # Default IP pattern
         cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data, self.ip_pattern)
         cmd_fun.init(self.app, self.config)
+        self.server_manager = cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data, self.ip_pattern)
+        logging.info("All modules initialized")
 
 
     def register_commands(self):

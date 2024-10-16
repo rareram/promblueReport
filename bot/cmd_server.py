@@ -29,7 +29,11 @@ class ServerManager:
         app.command("/server_info")(self.handle_server_info_command)
         app.command("/server_mngt")(self.handle_server_mngt_command)
         app.command("/server_button")(self.handle_server_button_command)
-        app.action("server_info_button")(self.handle_server_info_button)
+        # app.action("server_info_button")(self.handle_server_info_button)
+        app.action(re.compile(r"^server_info_button_\d+$"))(self.handle_server_info_button)
+    
+        self.logger.info("ServerManager initialized with action handlers")
+        self.logger.debug(r"Registered action handler for pattern: ^server_info_button_\d+$")
 
     def get_latest_csv_file(self, directory, prefix, extension):
         pattern = os.path.join(directory, f"{prefix}*{extension}")
@@ -208,12 +212,14 @@ class ServerManager:
 
             buttons = []
             for index, ip in enumerate(extracted_ips):
+                action_id = f"server_info_button_{index}"
                 buttons.append({
                     "type": "button",
                     "text": {"type": "plain_text", "text": ip},
                     "value": ip,
-                    "action_id": "server_info_button_{index}"
+                    "action_id": action_id
                 })
+                self.logger.debug(f"Created button with action_id: {action_id}")
 
             await say(
                 text=f"상위 {message_limit}개의 메시지에서 추출한 IP:",
@@ -228,13 +234,13 @@ class ServerManager:
                     }
                 ]
             )
-
         except Exception as e:
-            self.logger.error(f"Error in handle_server_button_command: {str(e)}")
-            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}")
+            self.logger.error(f"Error in handle_server_button_command: {str(e)}", exc_info=True)
+            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}") 
 
     async def handle_server_info_button(self, ack, body, say):
         await ack()
+        self.logger.info(f"Handling server info button action: {body['actions'][0]['action_id']}")
         ip = body['actions'][0]['value']
         user_id = body['user']['id']
         user_email = body['user'].get('email')
@@ -271,5 +277,9 @@ class ServerManager:
                 formatted_info = formatted_info.replace(placeholder, value)
         return formatted_info
 
+# def init(app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern):
+    # ServerManager(app, config, queue, check_permission, get_user_info, filter_data, ip_pattern)
 def init(app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern):
-    ServerManager(app, config, queue, check_permission, get_user_info, filter_data, ip_pattern)
+    manager = ServerManager(app, config, queue, check_permission, get_user_info, filter_data, ip_pattern)
+    logging.info("ServerManager initialized in cmd_server.py")
+    return manager
