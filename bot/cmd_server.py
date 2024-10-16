@@ -9,13 +9,14 @@ import glob
 from datetime import datetime
 
 class ServerManager:
-    def __init__(self, app: AsyncApp, config, queue, check_permission, get_user_info, filter_data):
+    def __init__(self, app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern):
         self.app = app
         self.config = config
         self.queue = queue
         self.check_permission = check_permission
         self.get_user_info = get_user_info
         self.filter_data = filter_data
+        self.ip_pattern = re.compile(ip_pattern)
         self.logger = logging.getLogger(__name__)
         self.CSV_FILE = self.get_latest_csv_file(
             os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
@@ -27,6 +28,8 @@ class ServerManager:
         app.command("/server_report")(self.handle_report_command)
         app.command("/server_info")(self.handle_server_info_command)
         app.command("/server_mngt")(self.handle_server_mngt_command)
+        app.command("/server_button")(self.handle_server_button_command)
+        app.action("server_info_button")(self.handle_server_info_button)
 
     def get_latest_csv_file(self, directory, prefix, extension):
         pattern = os.path.join(directory, f"{prefix}*{extension}")
@@ -180,5 +183,93 @@ class ServerManager:
     async def handle_server_mngt_command(self, ack, say, command, client):
         await self.handle_server_command(ack, say, command, self.config['TEMPLATES']['mngt_template'], client)
 
-def init(app: AsyncApp, config, queue, check_permission, get_user_info, filter_data):
-    ServerManager(app, config, queue, check_permission, get_user_info, filter_data)
+    async def handle_server_button_command(self, ack, say, command, client):
+        await ack()
+        user_group = self.check_permission(command['user_id'], command.get('user_email'), 'server_button')
+        if not user_group:
+            await say("명령어 실행 권한이 없습니다.")
+            return
+
+        channel_id = command['channel_id']
+        message_limit = int(self.config.get('BUTTON_GENERATION', 'message_limit', fallback=10))
+
+        try:
+            result = await client.conversations_history(channel=channel_id, limit=message_limit)
+            messages = result['messages']
+
+            extracted_ips = set()
+            for message in messages:
+                text = message.get('text', '')
+                extracted_ips.update(self.ip_pattern.findall(text))
+
+            if not extracted_ips:
+                await say(f"상위 {message_limit}개의 메시지에서 추출 가능한 IP가 없습니다.")
+                return
+
+            buttons = []
+            for index, ip in enumerate(extracted_ips):
+                buttons.append({
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": ip},
+                    "value": ip,
+                    "action_id": "server_info_button_{index}"
+                })
+
+            await say(
+                text=f"상위 {message_limit}개의 메시지에서 추출한 IP:",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* :mag_right:"}
+                    },
+                    {
+                        "type": "actions",
+                        "elements": buttons[:5]  # Limit to 5 buttons
+                    }
+                ]
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error in handle_server_button_command: {str(e)}")
+            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}")
+
+    async def handle_server_info_button(self, ack, body, say):
+        await ack()
+        ip = body['actions'][0]['value']
+        user_id = body['user']['id']
+        user_email = body['user'].get('email')
+
+        user_group = self.check_permission(user_id, user_email, 'server_info')
+        if not user_group:
+            await say("서버 정보 조회 권한이 없습니다.")
+            return
+
+        try:
+            df = self.read_extdata_file(self.CSV_FILE)
+            df = self.filter_data(df, user_group)
+            
+            server_info = df[(df['사설IP'] == ip) | (df['공인/NAT IP'] == ip)]
+            
+            if server_info.empty:
+                await say(f"{ip}에 해당하는 서버 정보를 찾을 수 없습니다.")
+                return
+            
+            template = self.config['TEMPLATES']['voca_template'].replace('##', '\n')
+            formatted_info = self.format_server_info(server_info.iloc[0], template)
+            
+            await say(formatted_info)
+        except Exception as e:
+            self.logger.error(f"Error in handle_server_info_button: {str(e)}")
+            await say(f"서버 정보 조회 중 오류가 발생했습니다: {str(e)}")
+
+    def format_server_info(self, server_info, template):
+        formatted_info = template
+        for column, value in server_info.items():
+            placeholder = f"{{{column}}}"
+            if placeholder in formatted_info:
+                value = '-' if pd.isna(value) or value == '' else str(value)
+                formatted_info = formatted_info.replace(placeholder, value)
+        return formatted_info
+
+def init(app: AsyncApp, config, queue, check_permission, get_user_info, filter_data, ip_pattern):
+    ServerManager(app, config, queue, check_permission, get_user_info, filter_data, ip_pattern)
