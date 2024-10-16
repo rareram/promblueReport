@@ -220,7 +220,7 @@ class ServerManager:
                 blocks=[
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": ":robot_face: :speech_balloon: 상위 {message_limit}개의 메세지에서 *추출한 IP:* :mag_right:"}
+                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* :mag_right:"}
                     },
                     {
                         "type": "actions",
@@ -228,6 +228,7 @@ class ServerManager:
                     }
                 ]
             )
+
         except Exception as e:
             self.logger.error(f"Error in handle_server_button_command: {str(e)}")
             await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}")

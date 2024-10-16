@@ -72,14 +72,14 @@ class LunchRecommender:
             blocks=[
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "어떤 장르로 추천해볼까유?"}
+                    "text": {"type": "mrkdwn", "text": ":speech_balloon: '어떤 장르로 추천해볼까유?'"}
                 },
                 buttons
             ]
         )
 
     async def show_progress(self, say):
-        progress_message = await say("메뉴 번개같이 골라줄테니께 긴장타봐유.. :thinking_face:")
+        progress_message = await say("'메뉴 번개같이 골라줄테니께 긴장타봐유..' :thinking_face:")
         progress_emojis = [":fork_and_knife:", ":rice:", ":hamburger:", ":pizza:", ":sushi:", ":curry:", ":cut_of_meat:", ":stew:"]
 
         for _ in range(5):
@@ -87,7 +87,7 @@ class LunchRecommender:
             await self.app.client.chat_update(
                 channel=progress_message['channel'],
                 ts=progress_message['ts'],
-                text=f"메뉴 번개같이 골라줄테니께 긴장타봐유.. {progress}"
+                text=f"'메뉴 번개같이 골라줄테니께 긴장타봐유..' {progress}"
             )
             await asyncio.sleep(random.uniform(0.2, 0.5))
     
@@ -107,7 +107,7 @@ class LunchRecommender:
                 blocks=[
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f"오늘은 *{recommendation['식당']}* 가서 *{recommendation['메뉴']}* 한번 씹어봐유"}
+                        "text": {"type": "mrkdwn", "text": f":speech_balloon: '오늘은 *{recommendation['식당']}* 가서 *{recommendation['메뉴']}* 한번 씹어봐유'"}
                     },
                     {
                         "type": "actions",
@@ -130,7 +130,7 @@ class LunchRecommender:
                         "fields": [
                             {
                                 "type": "mrkdwn",
-                                "text": "*추천은 맘에 드는겨?*"
+                                "text": ":speech_balloon: '추천은 맘에 드는겨?'"
                             },
                             {
                                 "type": "mrkdwn",
