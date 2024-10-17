@@ -203,53 +203,67 @@ class ServerManager:
             result = await client.conversations_history(channel=channel_id, limit=message_limit)
             messages = result['messages']
 
-            # extracted_ips = set()
             extracted_info = set()
             for message in messages:
-                text = message.get('text', '')
+                # text = message.get('text', '')
+                text = self.extract_text_from_message(message) 
                 ip_matches = self.ip_pattern.findall(text)
                 host_matches = self.hostname_pattern.findall(text)
-                # extracted_ips.update(self.ip_pattern.findall(text))
+
                 extracted_info.update(ip_matches)
                 extracted_info.update(host_matches)
 
-            # if not extracted_ips:
             if not extracted_info:
                 await say(f"상위 {message_limit}개의 메시지에서 추출 가능한 IP 또는 Hostname이 없습니다.")
                 return
 
             df = self.read_extdata_file(self.CSV_FILE)
-            buttons = []
-            # for index, ip in enumerate(extracted_ips):
-            for index, info in enumerate(extracted_info):
-                ip = self.get_ip_from_info(info, df)
-                if ip:
-                    action_id = f"server_info_button_{index}"
-                    buttons.append({
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": ip},
-                        "value": ip,
-                        "action_id": action_id
-                    })
-                    self.logger.debug(f"Created button with action_id: {action_id}")
+            # buttons = []
+            buttons = self.create_buttons_from_info(extracted_info, df)
+
+            if not buttons:
+                await say("추출된 정보에서 유효한 IP를 찾을 수 없습니다.")
+                return
 
             await say(
-                text=f"상위 {message_limit}개의 메시지에서 추출한 IP 또는 Hostname:",
+                text=f"상위 {message_limit}개의 메시지에서 추출한 IP:",
                 blocks=[
                     {
                         "type": "section",
-                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* (limit: *{extract_ips_limit}*) :mag_right:"}
+                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* (limit: *{extract_ips_limit}* buttons) :mag_right:"}
                     },
                     {
                         "type": "actions",
-                        # "elements": buttons[:5]  # Limit to 5 buttons
-                        "elements": buttons[:7]  # Limit to 7 buttons
+                        "elements": buttons[:extract_ips_limit]  # Limit to 5 buttons
                     }
                 ]
             )
         except Exception as e:
             self.logger.error(f"Error in handle_server_button_command: {str(e)}", exc_info=True)
-            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}") 
+            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}")
+
+    def extract_text_from_message(self, message):
+        text = message.get('text', '')
+        if 'blocks' in message:
+            for block in message['blocks']:
+                if block['type'] == 'section' and 'text' in block:
+                    text += ' ' + block['text'].get('text', '')
+        return text
+
+    def create_buttons_from_info(self, extracted_info, df):
+        buttons = []
+        for index, info in enumerate(extracted_info):
+            ip = self.get_ip_from_info(info, df)
+            if ip:
+                action_id = f"server_info_button_{index}"
+                buttons.append({
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": ip},
+                    "value": ip,
+                    "action_id": action_id
+                })
+                self.logger.debug(f"Created button with action_id: {action_id}")
+        return buttons
 
     def get_ip_from_info(self, info, df):
         if self.ip_pattern.match(info):
