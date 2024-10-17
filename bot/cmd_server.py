@@ -24,6 +24,7 @@ class ServerManager:
             config['FILES']['csv_file_prefix'],
             config['FILES']['csv_file_extension']
         )
+        self.CSV_FILE_NAME = os.path.basename(self.CSV_FILE)
 
         # 슬래시 명령어 핸들러 등록
         app.command("/server_report")(self.handle_report_command)
@@ -197,61 +198,100 @@ class ServerManager:
 
         channel_id = command['channel_id']
         message_limit = int(self.config.get('BUTTON_GENERATION', 'message_limit', fallback=10))
+        extract_ips_limit = int(self.config.get('BUTTON_GENERATION', 'extract_ips_limit', fallback=5))
 
         try:
             result = await client.conversations_history(channel=channel_id, limit=message_limit)
             messages = result['messages']
 
-            # extracted_ips = set()
             extracted_info = set()
             for message in messages:
-                text = message.get('text', '')
+                # text = message.get('text', '')
+                text = self.extract_text_from_message(message) 
                 ip_matches = self.ip_pattern.findall(text)
                 host_matches = self.hostname_pattern.findall(text)
-                # extracted_ips.update(self.ip_pattern.findall(text))
+
                 extracted_info.update(ip_matches)
                 extracted_info.update(host_matches)
 
-            # if not extracted_ips:
             if not extracted_info:
                 await say(f"상위 {message_limit}개의 메시지에서 추출 가능한 IP 또는 Hostname이 없습니다.")
                 return
 
             df = self.read_extdata_file(self.CSV_FILE)
-            buttons = []
-            # for index, ip in enumerate(extracted_ips):
-            for index, info in enumerate(extracted_info):
-                ip = self.get_ip_from_info(info, df)
-                if ip:
-                    action_id = f"server_info_button_{index}"
-                    buttons.append({
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": ip},
-                        "value": ip,
-                        "action_id": action_id
-                    })
-                    self.logger.debug(f"Created button with action_id: {action_id}")
+            buttons, unmapped_hostnames, unmapped_ips = self.create_buttons_and_find_unmapped(extracted_info, df)
 
-            await say(
-                text=f"상위 {message_limit}개의 메시지에서 추출한 IP 또는 Hostname:",
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* :mag_right:"}
-                    },
-                    {
-                        "type": "actions",
-                        "elements": buttons[:5]  # Limit to 5 buttons
-                    }
-                ]
-            )
+            if not buttons:
+                await say("추출된 정보에서 유효한 IP를 찾을 수 없습니다.")
+                return
+
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* (limit: *{extract_ips_limit}* buttons) :mag_right:"}
+                },
+                {
+                    "type": "actions",
+                    "elements": buttons[:extract_ips_limit]
+                }
+            ]
+
+            if unmapped_hostnames or unmapped_ips:
+                unmapped_text = f"※ 참조파일: `{self.CSV_FILE_NAME}`\n"
+                if unmapped_hostnames:
+                    unmapped_text += "*매핑되지 않은 Hostname:*\n" + "\n".join(f"• {hostname}" for hostname in unmapped_hostnames)
+                if unmapped_ips:
+                    if unmapped_text:
+                        unmapped_text += "\n\n"
+                    unmapped_text += f"*구성관리조회 CSV에 없는 IP:*\n" + "\n".join(f"• {ip}" for ip in unmapped_ips)
+                
+                blocks.append({
+                    "type": "context",
+                    "elements": [
+                        {"type": "mrkdwn", "text": unmapped_text}
+                    ]
+                })
+
+            await say(blocks=blocks)
+
         except Exception as e:
             self.logger.error(f"Error in handle_server_button_command: {str(e)}", exc_info=True)
-            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}") 
+            await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}")
+
+    def extract_text_from_message(self, message):
+        text = message.get('text', '')
+        if 'blocks' in message:
+            for block in message['blocks']:
+                if block['type'] == 'section' and 'text' in block:
+                    text += ' ' + block['text'].get('text', '')
+        return text
+
+    def create_buttons_and_find_unmapped(self, extracted_info, df):
+        buttons = []
+        unmapped_hostnames = set()
+        unmapped_ips = set()
+        for index, info in enumerate(extracted_info):
+            ip = self.get_ip_from_info(info, df)
+            if ip:
+                action_id = f"server_info_button_{index}"
+                buttons.append({
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": ip},
+                    "value": ip,
+                    "action_id": action_id
+                })
+                self.logger.debug(f"Created button with action_id: {action_id}")
+            elif self.ip_pattern.match(info):
+                unmapped_ips.add(info)
+            else:
+                unmapped_hostnames.add(info)
+        return buttons, unmapped_hostnames, unmapped_ips
 
     def get_ip_from_info(self, info, df):
         if self.ip_pattern.match(info):
-            return info
+            if info in df['사설IP'].values or info in df['공인/NAT IP'].values:
+                return info
+            return None
         else:
             matching_row = df[df['Hostname'] == info]
             if not matching_row.empty:

@@ -17,7 +17,7 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.15 (2024.10.16)'
+__version__ = '0.6.20 (2024.10.17)'
 
 class slrepoBot:
     def __init__(self):
@@ -134,7 +134,6 @@ class slrepoBot:
             logging.error("'BUTTON_GENERATION' section or 'ip_pattern''hostname_pattern' key not found in config")
             self.ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'              # Default IP pattern
             self.hostname_pattern = r'\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b'  # Default Hostname pattern
-        cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data, self.ip_pattern, self.hostname_pattern)
         cmd_fun.init(self.app, self.config)
         self.server_manager = cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data, self.ip_pattern, self.hostname_pattern)
         logging.info("All modules initialized")
@@ -148,13 +147,13 @@ class slrepoBot:
         await ack()
         if command['text']:
             await say(f"참고: '/bot_ver' 명령어는 추가 파라미터를 필요로 하지 않습니다. 입력하신 '{command['text']}'는 무시됩니다.")
-        await say(f"현재 슬리포봇(slrepoBot) 버전: v{__version__}")
+        await say(f"현재 채찍PT봇 버전: v{__version__}")
 
     async def run(self):
         handler = AsyncSocketModeHandler(self.app, self.config['SLACK']['app_token'])
         try:
             await handler.start_async()
-            logging.info(f"slrepoBot v{__version__} is running!")
+            logging.info(f"채찍PT봇 v{__version__} 구동중!")
             while True:
                 await asyncio.sleep(3600)
         finally:
@@ -168,5 +167,5 @@ async def main():
     await bot.run()
 
 if __name__ == "__main__":
-    print(f"Starting slrepoBot v{__version__}")
+    print(f"Starting 채찍PT봇 v{__version__}")
     asyncio.run(main())
