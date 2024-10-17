@@ -24,6 +24,7 @@ class ServerManager:
             config['FILES']['csv_file_prefix'],
             config['FILES']['csv_file_extension']
         )
+        self.CSV_FILE_NAME = os.path.basename(self.CSV_FILE)
 
         # 슬래시 명령어 핸들러 등록
         app.command("/server_report")(self.handle_report_command)
@@ -218,8 +219,7 @@ class ServerManager:
                 return
 
             df = self.read_extdata_file(self.CSV_FILE)
-            # buttons = self.create_buttons_from_info(extracted_info, df)
-            buttons, unmapped_hostnames = self.create_buttons_and_find_unmapped(extracted_info, df)
+            buttons, unmapped_hostnames, unmapped_ips = self.create_buttons_and_find_unmapped(extracted_info, df)
 
             if not buttons:
                 await say("추출된 정보에서 유효한 IP를 찾을 수 없습니다.")
@@ -236,8 +236,15 @@ class ServerManager:
                 }
             ]
 
-            if unmapped_hostnames:
-                unmapped_text = "매핑되지 않은 호스트네임:\n" + "\n".join(f"• {hostname}" for hostname in unmapped_hostnames)
+            if unmapped_hostnames or unmapped_ips:
+                unmapped_text = f"※ 참조파일: `{self.CSV_FILE_NAME}`\n"
+                if unmapped_hostnames:
+                    unmapped_text += "*매핑되지 않은 Hostname:*\n" + "\n".join(f"• {hostname}" for hostname in unmapped_hostnames)
+                if unmapped_ips:
+                    if unmapped_text:
+                        unmapped_text += "\n\n"
+                    unmapped_text += f"*구성관리조회 CSV에 없는 IP:*\n" + "\n".join(f"• {ip}" for ip in unmapped_ips)
+                
                 blocks.append({
                     "type": "context",
                     "elements": [
@@ -262,6 +269,7 @@ class ServerManager:
     def create_buttons_and_find_unmapped(self, extracted_info, df):
         buttons = []
         unmapped_hostnames = set()
+        unmapped_ips = set()
         for index, info in enumerate(extracted_info):
             ip = self.get_ip_from_info(info, df)
             if ip:
@@ -273,28 +281,17 @@ class ServerManager:
                     "action_id": action_id
                 })
                 self.logger.debug(f"Created button with action_id: {action_id}")
-            elif not self.ip_pattern.match(info):
+            elif self.ip_pattern.match(info):
+                unmapped_ips.add(info)
+            else:
                 unmapped_hostnames.add(info)
-        return buttons, unmapped_hostnames
-
-    # def create_buttons_from_info(self, extracted_info, df):
-    #     buttons = []
-    #     for index, info in enumerate(extracted_info):
-    #         ip = self.get_ip_from_info(info, df)
-    #         if ip:
-    #             action_id = f"server_info_button_{index}"
-    #             buttons.append({
-    #                 "type": "button",
-    #                 "text": {"type": "plain_text", "text": ip},
-    #                 "value": ip,
-    #                 "action_id": action_id
-    #             })
-    #             self.logger.debug(f"Created button with action_id: {action_id}")
-    #     return buttons
+        return buttons, unmapped_hostnames, unmapped_ips
 
     def get_ip_from_info(self, info, df):
         if self.ip_pattern.match(info):
-            return info
+            if info in df['사설IP'].values or info in df['공인/NAT IP'].values:
+                return info
+            return None
         else:
             matching_row = df[df['Hostname'] == info]
             if not matching_row.empty:

@@ -17,7 +17,7 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.18 (2024.10.17)'
+__version__ = '0.6.20 (2024.10.17)'
 
 class slrepoBot:
     def __init__(self):
@@ -134,7 +134,6 @@ class slrepoBot:
             logging.error("'BUTTON_GENERATION' section or 'ip_pattern''hostname_pattern' key not found in config")
             self.ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'              # Default IP pattern
             self.hostname_pattern = r'\b[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+\b'  # Default Hostname pattern
-        cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data, self.ip_pattern, self.hostname_pattern)
         cmd_fun.init(self.app, self.config)
         self.server_manager = cmd_server.init(self.app, self.config, self.queue, self.check_permission, self.get_user_info, self.filter_data, self.ip_pattern, self.hostname_pattern)
         logging.info("All modules initialized")
