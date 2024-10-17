@@ -17,7 +17,7 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.17 (2024.10.16)'
+__version__ = '0.6.18 (2024.10.17)'
 
 class slrepoBot:
     def __init__(self):

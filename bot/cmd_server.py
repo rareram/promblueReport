@@ -218,26 +218,35 @@ class ServerManager:
                 return
 
             df = self.read_extdata_file(self.CSV_FILE)
-            # buttons = []
-            buttons = self.create_buttons_from_info(extracted_info, df)
+            # buttons = self.create_buttons_from_info(extracted_info, df)
+            buttons, unmapped_hostnames = self.create_buttons_and_find_unmapped(extracted_info, df)
 
             if not buttons:
                 await say("추출된 정보에서 유효한 IP를 찾을 수 없습니다.")
                 return
 
-            await say(
-                text=f"상위 {message_limit}개의 메시지에서 추출한 IP:",
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* (limit: *{extract_ips_limit}* buttons) :mag_right:"}
-                    },
-                    {
-                        "type": "actions",
-                        "elements": buttons[:extract_ips_limit]  # Limit to 5 buttons
-                    }
-                ]
-            )
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f":robot_face: :speech_balloon: 상위 *{message_limit}* 개의 메세지에서 *추출한 IP:* (limit: *{extract_ips_limit}* buttons) :mag_right:"}
+                },
+                {
+                    "type": "actions",
+                    "elements": buttons[:extract_ips_limit]
+                }
+            ]
+
+            if unmapped_hostnames:
+                unmapped_text = "매핑되지 않은 호스트네임:\n" + "\n".join(f"• {hostname}" for hostname in unmapped_hostnames)
+                blocks.append({
+                    "type": "context",
+                    "elements": [
+                        {"type": "mrkdwn", "text": unmapped_text}
+                    ]
+                })
+
+            await say(blocks=blocks)
+
         except Exception as e:
             self.logger.error(f"Error in handle_server_button_command: {str(e)}", exc_info=True)
             await say(f"명령어 처리 중 오류가 발생했습니다: {str(e)}")
@@ -250,8 +259,9 @@ class ServerManager:
                     text += ' ' + block['text'].get('text', '')
         return text
 
-    def create_buttons_from_info(self, extracted_info, df):
+    def create_buttons_and_find_unmapped(self, extracted_info, df):
         buttons = []
+        unmapped_hostnames = set()
         for index, info in enumerate(extracted_info):
             ip = self.get_ip_from_info(info, df)
             if ip:
@@ -263,7 +273,24 @@ class ServerManager:
                     "action_id": action_id
                 })
                 self.logger.debug(f"Created button with action_id: {action_id}")
-        return buttons
+            elif not self.ip_pattern.match(info):
+                unmapped_hostnames.add(info)
+        return buttons, unmapped_hostnames
+
+    # def create_buttons_from_info(self, extracted_info, df):
+    #     buttons = []
+    #     for index, info in enumerate(extracted_info):
+    #         ip = self.get_ip_from_info(info, df)
+    #         if ip:
+    #             action_id = f"server_info_button_{index}"
+    #             buttons.append({
+    #                 "type": "button",
+    #                 "text": {"type": "plain_text", "text": ip},
+    #                 "value": ip,
+    #                 "action_id": action_id
+    #             })
+    #             self.logger.debug(f"Created button with action_id: {action_id}")
+    #     return buttons
 
     def get_ip_from_info(self, info, df):
         if self.ip_pattern.match(info):
