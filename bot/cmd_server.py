@@ -225,6 +225,7 @@ class ServerManager:
                 await say("추출된 정보에서 유효한 IP를 찾을 수 없습니다.")
                 return
 
+            text_content = f"상위 {message_limit}개의 메시지에서 추출한 IP:"
             blocks = [
                 {
                     "type": "section",
@@ -237,7 +238,7 @@ class ServerManager:
             ]
 
             if unmapped_hostnames or unmapped_ips:
-                unmapped_text = f"※ 참조파일: `{self.CSV_FILE_NAME}`\n"
+                unmapped_text = f"※ _참조파일: `{self.CSV_FILE_NAME}`_\n"
                 if unmapped_hostnames:
                     unmapped_text += "*매핑되지 않은 Hostname:*\n" + "\n".join(f"• {hostname}" for hostname in unmapped_hostnames)
                 if unmapped_ips:
@@ -252,7 +253,9 @@ class ServerManager:
                     ]
                 })
 
-            await say(blocks=blocks)
+                text_content += f"\n\n{unmapped_text}"
+
+            await say(text=text_content, blocks=blocks)
 
         except Exception as e:
             self.logger.error(f"Error in handle_server_button_command: {str(e)}", exc_info=True)
