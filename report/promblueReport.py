@@ -119,9 +119,11 @@ def query_prometheus(prom_url, query, start_time, end_time):
         return result
     except Exception as e:
         print(f"Error querying Prometheus: {e}")
+        print(f"URL: {prom_url}")
         print(f"Query: {query}")
         print(f"Start time: {start_time}")
         print(f"End time: {end_time}")
+        print(f"Exception type: {type(e)}")
         return None
 
 def get_ollama_feedback(ollama_url, prompt, metrics_dump, timeout):

@@ -19,8 +19,12 @@ class ServerManager:
         self.ip_pattern = re.compile(ip_pattern)
         self.hostname_pattern = re.compile(hostname_pattern)
         self.logger = logging.getLogger(__name__)
+
+        # report 모듈을 함수로 받지 않고 인터프리터로 실행시키기 위한 루트 지정
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
         self.CSV_FILE = self.get_latest_csv_file(
-            os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
+            os.path.join(self.project_root, self.config['FILES']['csv_file_dir'].replace('./', '')),
             config['FILES']['csv_file_prefix'],
             config['FILES']['csv_file_extension']
         )
@@ -51,28 +55,60 @@ class ServerManager:
     async def process_report(self, ip, time, channel_id, user_id, thread_ts=None):
         self.logger.info(f"요청 <@{user_id}> 대상 서버IP {ip}")
         try:
-            out_dir = os.path.join(os.path.dirname(__file__), self.config['FILES']['out_file_dir'])
+            # venv 인터프리터, promblueReport, output 경로 지정
+            python_interpreter = os.path.join(self.project_root, self.config['FILES']['venv_path'].replace('./', ''), 'bin', 'python')
+            report_script = os.path.join(self.project_root, 'report', 'promblueReport.py')
+            report_config = os.path.join(self.project_root, 'report', 'promblueReport.conf')
+            out_dir = os.path.join(self.project_root, self.config['FILES']['out_file_dir'].replace('./', ''))
+
+            self.logger.debug(f"Project root: {self.project_root}")
+            self.logger.debug(f"Using Python interpreter: {python_interpreter}")
+            self.logger.info(f"Report script: {report_script}")
+            self.logger.debug(f"Report config: {report_config}")
+            self.logger.debug(f"Output directory: {out_dir}")
+
             os.makedirs(out_dir, exist_ok=True)
-        
             request_id = f"{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
             command = [
-                "python3",
-                os.path.join(os.path.dirname(__file__), "..", "report", "promblueReport.py"),
+                python_interpreter,  # 시스템 python3 대신 venv의 python 사용
+                report_script,
                 "--target", ip,
                 "--output", out_dir,
-                "--request-id", request_id
+                "--request-id", request_id,
+                "--config", report_config
             ]
             if time:
                 command.extend(["--time", time])
+        
+            self.logger.info(f"Executing command: {' '.join(command)}")
         
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
-                check=True,
-                timeout=self.config['QUEUE'].getint('timeout', fallback=300)
+                # check=True,
+                check=False,             # 2024.10.22 에러 발생시에도 출력 확인 디버깅용 ㅠㅠ
+                timeout=self.config['QUEUE'].getint('timeout', fallback=300),
+                cwd=self.project_root,
+                env={**os.environ, 'PYTHONPATH': self.project_root}
             )
+        
+            # 실행 결과 로깅
+            if result.stdout:
+                self.logger.info(f"Command stdout:\n{result.stdout}")
+            if result.stderr:
+                self.logger.error(f"Command stderr:\n{result.stderr}")
+        
+            if result.returncode != 0:
+                error_msg = f"Command failed with return code {result.returncode}\nError: {result.stderr}"
+                self.logger.error(error_msg)
+                await self.app.client.chat_postMessage(
+                    channel=channel_id,
+                    text=f"<@{user_id}> 보고서 생성 중 오류가 발생했습니다:\n```{error_msg}```",
+                    thread_ts=thread_ts
+                )
+                return
         
             output_file = next((line.split(": ")[1].strip() for line in result.stdout.split('\n') if line.startswith("Report generated successfully:")), None)
         
