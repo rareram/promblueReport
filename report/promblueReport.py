@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import pandas as pd
 import numpy as np
 
-__version__ = '0.4.0 (2024.10.25)'
+__version__ = '0.4.1 (2024.10.28)'
 
 class PromBlueReport:
     def __init__(self, config_path: str = 'promblueReport.conf'):
@@ -39,14 +39,17 @@ class PromBlueReport:
         try:
             params = {
                 'query': query,
-                'start': start_time.timestamp(),
-                'end': end_time.timestamp(),
+                'start': str(int(start_time.timestamp())),
+                'end': str(int(end_time.timestamp())),
                 'step': self.config['prometheus']['step_interval']
             }
+
+            self.logger.debug(f"Querying Prometheus - URL: {self.prometheus_url}")
+            self.logger.debug(f"Query: {query}")
+            self.logger.debug(f"Parameters: {params}")
         
-            timeout = aiohttp.ClientTimeout(
-                total=float(self.config['prometheus'].get('query_timeout', 30))
-            )
+            timeout_value = float(self.config['prometheus'].get('query_timeout', '30'))
+            timeout = aiohttp.ClientTimeout(total=timeout_value)
         
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 url = f"{self.prometheus_url}/api/v1/query_range"
@@ -56,14 +59,16 @@ class PromBlueReport:
                         if response.status != 200:
                             error_text = await response.text()
                             self.logger.error(f"프로메테우스 쿼리 실패 - Status: {response.status}, Error: {error_text}")
+                            self.logger.error(f"Error response: {error_text}")
                             return []
 
                         data = await response.json()
                     
                         if data['status'] != 'success':
-                            self.logger.error(f"프로메테우스 쿼리 실패 - Error: {data.get('error', 'Unknown error')}")
+                            self.logger.error(f"프로메테우스 응답 오류 - Error: {data.get('error', 'Unknown error')}")
                             return []
 
+                        self.logger.debug(f"Query successful, received {len(data['data']['result'])} results")
                         return data['data']['result']
 
                 except aiohttp.ClientError as e:
@@ -107,8 +112,30 @@ class PromBlueReport:
             # 기본값: 숫자만 반환
             return f"{metric_value:.1f}%"
 
+    # 출력 파일 생성
+    def _generate_output_filename(self, target: str, output_dir: str = None, request_id: str = None) -> str:
+        timestamp = datetime.now().strftime('%Y%m%d%H%M')
+        prefix = self.config['files']['output_prefix']
+        
+        # output_dir이 지정되지 않은 경우 기본 디렉토리 사용
+        if not output_dir:
+            output_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                self.config['files']['output_dir'].lstrip('../')
+            )
+        
+        os.makedirs(output_dir, exist_ok=True)
+
+        # request_id가 있으면 파일명에 포함 (slackbot에서 생성)
+        if request_id:
+            filename = f"{prefix}_{target}_{timestamp}_{request_id}.xlsx"
+        else:
+            filename = f"{prefix}_{target}_{timestamp}.xlsx"
+            
+        return os.path.join(output_dir, filename)
+
     # 템플릿 선택 및 보고서 생성 공통
-    async def generate_report(self, target: str, time_range: str = 'today', template: str = None) -> str:
+    async def generate_report(self, target: str, time_range: str = 'today', template: str = None, output_dir: str = None, request_id: str = None) -> str:
         template = template or self.report_template
         
         if template == 'default':
@@ -123,7 +150,7 @@ class PromBlueReport:
         else:
             raise ValueError(f"Unknown template: {template}")
 
-        return await template_class.create_report(target, time_range)
+        return await template_class.create_report(target, time_range, output_dir, request_id)
 
     @staticmethod
     def get_version():
@@ -135,17 +162,22 @@ def main():
     parser.add_argument('--time', default='today', help='Time parameter (e.g., 24h, 7d, today)')
     parser.add_argument('--template', default='default', help='Report template (default, compact, detailed)')
     parser.add_argument('--config', default='promblueReport.conf', help='Path to config file')
+    parser.add_argument('--output', help='Output directory for the report')
+    parser.add_argument('--request-id', help='Request ID for the report')
+    
     args = parser.parse_args()
 
     async def async_main():
         try:
             report_generator = PromBlueReport(args.config)
             output_file = await report_generator.generate_report(
-                args.target, 
+                args.target,
                 args.time,
-                args.template
+                args.template,
+                args.output,
+                args.request_id
             )
-            print(f"Report generated: {output_file}")
+            print(f"Report generated successfully: {output_file}")
             return output_file
         except Exception as e:
             print(f"Error generating report: {str(e)}")

@@ -37,6 +37,20 @@ class ServerManager:
         app.command("/server_button")(self.handle_server_button_command)
         # app.action("server_info_button")(self.handle_server_info_button)
         app.action(re.compile(r"^server_info_button_\d+$"))(self.handle_server_info_button)
+
+        # Progress display 설정 로드
+        self.progress_config = {
+            'bar_char': config['PROGRESS_DISPLAY'].get('progress_bar_char', '█'),
+            'empty_char': config['PROGRESS_DISPLAY'].get('progress_empty_char', '▒'),
+            'bar_length': config['PROGRESS_DISPLAY'].getint('progress_bar_length', 10),
+            'update_interval': config['PROGRESS_DISPLAY'].getint('update_interval', 5),
+            'emojis': config['PROGRESS_DISPLAY'].get('progress_emojis', '').split(','),
+            'steps': config['PROGRESS_DISPLAY'].get('progress_steps', '').split(','),
+            'start_message': config['PROGRESS_DISPLAY'].get('start_message', '보고서 생성을 시작합니다...'),
+            'complete_message': config['PROGRESS_DISPLAY'].get('complete_message', '보고서 생성이 완료되었습니다.'),
+            'error_message': config['PROGRESS_DISPLAY'].get('error_message', '보고서 생성 중 오류가 발생했습니다.'),
+            'timeout_message': config['PROGRESS_DISPLAY'].get('timeout_message', '보고서 생성 시간이 초과되었습니다.')
+        }
     
         self.logger.info("ServerManager initialized with action handlers")
         self.logger.debug(r"Registered action handler for pattern: ^server_info_button_\d+$")
@@ -51,9 +65,41 @@ class ServerManager:
     def read_extdata_file(self, filename):
         return pd.read_csv(filename, encoding='euc-kr')
 
+    # 보고서 생성 진행상태 메시지
+    async def update_progress_message(self, client, channel_id, message_ts, current_step, total_steps, step_name):
+        try:
+            filled = int(self.progress_config['bar_length'] * current_step / total_steps)
+            bar = (self.progress_config['bar_char'] * filled + 
+                   self.progress_config['empty_char'] * (self.progress_config['bar_length'] - filled))
+            percentage = int(100 * current_step / total_steps)
+        
+            emojis = self.progress_config['emojis']
+            emoji = self.progress_config['emojis'][current_step % len(self.progress_config['emojis'])]
+        
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=f"보고서 생성 중입니다... {emoji}\n"
+                     f"진행 단계: {step_name}\n"
+                     f"진행률: {bar} {percentage}%"
+            )
+        except Exception as e:
+            self.logger.error(f"Progress update failed: {str(e)}")
+            pass
+
     # 보고서 생성 로직
     async def process_report(self, ip, time, channel_id, user_id, thread_ts=None):
         self.logger.info(f"요청 <@{user_id}> 대상 서버IP {ip}")
+        initial_message = await self.app.client.chat_postMessage(
+            channel=channel_id,
+            text=f"{self.progress_config['start_message']}\n"
+                 f"진행 단계: {self.progress_config['steps'][0]}\n"
+                 f"진행률: {self.progress_config['bar_char']} 0%"
+        )
+
+        progress_task = None
+        process = None
+
         try:
             # venv 인터프리터, promblueReport, output 경로 지정
             python_interpreter = os.path.join(self.project_root, self.config['FILES']['venv_path'].replace('./', ''), 'bin', 'python')
@@ -80,66 +126,147 @@ class ServerManager:
             ]
             if time:
                 command.extend(["--time", time])
-        
+            
             self.logger.info(f"Executing command: {' '.join(command)}")
         
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                # check=True,
-                check=False,             # 2024.10.22 에러 발생시에도 출력 확인 디버깅용 ㅠㅠ
-                timeout=self.config['QUEUE'].getint('timeout', fallback=300),
+            progress_task = asyncio.create_task(
+                self.progress_updates(
+                    self.app.client, 
+                    channel_id, 
+                    initial_message['ts'], 
+                    self.progress_config['steps'],
+                    len(self.progress_config['steps'])
+            ))
+        
+            process = await asyncio.subprocess.create_subprocess_exec( 
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=self.project_root,
                 env={**os.environ, 'PYTHONPATH': self.project_root}
             )
-        
-            # 실행 결과 로깅
-            if result.stdout:
-                self.logger.info(f"Command stdout:\n{result.stdout}")
-            if result.stderr:
-                self.logger.error(f"Command stderr:\n{result.stderr}")
-        
-            if result.returncode != 0:
-                error_msg = f"Command failed with return code {result.returncode}\nError: {result.stderr}"
-                self.logger.error(error_msg)
-                await self.app.client.chat_postMessage(
-                    channel=channel_id,
-                    text=f"<@{user_id}> 보고서 생성 중 오류가 발생했습니다:\n```{error_msg}```",
-                    thread_ts=thread_ts
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=self.config['QUEUE'].getint('timeout', fallback=300)
                 )
-                return
+                stdout = stdout.decode()
+                stderr = stderr.decode()
+                returncode = process.returncode
+
+                if stdout:
+                    self.logger.info(f"Command stdout:\n{stdout}")
+                if stderr:
+                    self.logger.error(f"Command stderr:\n{stderr}")
+
+                # 에러 체크 (check=True 효과)
+                if returncode != 0:
+                    raise subprocess.CalledProcessError(returncode, command, stdout, stderr)
+
+            except asyncio.TimeoutError:
+                if process:
+                    process.kill()
+                raise subprocess.TimeoutExpired(command, self.config['QUEUE'].getint('timeout', fallback=300))
+
+            finally:
+                # 프로그레스 태스크 정리
+                if progress_task and not progress_task.done():
+                    progress_task.cancel()
+                    try:
+                        await progress_task
+                    except asyncio.CancelledError:
+                        pass
         
-            output_file = next((line.split(": ")[1].strip() for line in result.stdout.split('\n') if line.startswith("Report generated successfully:")), None)
+            output_file = next((line.split(": ")[1].strip() for line in stdout.split('\n') if line.startswith("Report generated successfully:")), None)
         
             if output_file and os.path.exists(output_file):
                 time_display = "오늘 0시부터 현재까지" if time == 'today' else time
-                # await app.client.files_upload(
+                # 최종 결과와 파일을 스레드로 표시
                 await self.app.client.files_upload_v2(
-                    channels=channel_id,
+                    channel=channel_id,
                     file=output_file,
                     initial_comment=f"<@{user_id}> {ip}에 대한 {time_display} 기간의 보고서입니다.",
-                    thread_ts=thread_ts
+                    thread_ts=initial_message['ts']  # 초기 메시지에 스레드로 연결
                 )
                 await self.app.client.chat_postMessage(
                     channel=channel_id,
-                    text=f"<@{user_id}> 보고서가 성공적으로 업로드되었습니다.",
-                    thread_ts=thread_ts
+                    thread_ts=initial_message['ts'],  # 초기 메시지에 스레드로 연결
+                    text=f"<@{user_id}> 보고서가 성공적으로 생성되었습니다. ✨"
                 )
-                self.logger.info(f"완료 <@{user_id}> 대상 서버IP {ip}")
+                # 메인 메시지 업데이트
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=initial_message['ts'],
+                    text=self.progress_config['complete_message']
+                )
             else:
+                # 실패 메시지를 스레드로 표시
                 await self.app.client.chat_postMessage(
                     channel=channel_id,
-                    text=f"<@{user_id}> 보고서 파일을 생성하지 못했습니다.",
-                    thread_ts=thread_ts
+                    thread_ts=initial_message['ts'],  # 초기 메시지에 스레드로 연결
+                    text=f"<@{user_id}> 보고서 파일을 생성하지 못했습니다."
                 )
-                self.logger.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 파일 생성 실패")
+                # 메인 메시지 업데이트
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=initial_message['ts'],
+                    text=f"보고서 생성 실패. {self.progress_config['error_message']}"
+                )
         except subprocess.TimeoutExpired:
-            await self.app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서 생성 시간이 초과되었습니다.")
-            self.logger.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 시간 초과")
+            # 타임아웃 메시지를 스레드로 표시
+            await self.app.client.chat_postMessage(
+                channel=channel_id, 
+                thread_ts=initial_message['ts'],  # 초기 메시지에 스레드로 연결
+                text=f"<@{user_id}> {self.progress_config['timeout_message']}"
+            )
+            # 메인 메시지 업데이트
+            await self.app.client.chat_update(
+                channel=channel_id,
+                ts=initial_message['ts'],
+                text=f"보고서 생성 실패. {self.progress_config['timeout_message']}"
+            )
         except Exception as e:
-            await self.app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서 생성 중 오류가 발생했습니다: {str(e)}")
-            self.logger.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 오류: {str(e)}")
+            if progress_task and not progress_task.done():
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
+
+            error_msg = str(e)
+            self.logger.error(f"Error in process_report: {error_msg}")
+            await self.app.client.chat_postMessage(
+                channel=channel_id,
+                thread_ts=initial_message['ts'],
+                text=f"<@{user_id}> {self.progress_config['error_message']}: {error_msg}"
+            )
+            await self.app.client.chat_update(
+                channel=channel_id,
+                ts=initial_message['ts'],
+                text=f"보고서 생성 실패. {self.progress_config['error_message']}"
+            )
+    
+    # 주기적으로 진행 상태 업데이트
+    async def progress_updates(self, client, channel_id, message_ts, steps, total_steps):
+        try:
+            delay_per_step = int(self.progress_config['update_interval'])
+            for i, step in enumerate(steps, 1):
+                await self.update_progress_message(
+                    client, channel_id, message_ts, i, len(steps), step
+                )
+                await asyncio.sleep(delay_per_step)
+
+                if i == len(steps) - 1:
+                    await asyncio.sleep(delay_per_step * 2)
+        except asyncio.CancelledError:
+            # 보고서 생성이 완료되면 마지막 상태 업데이트
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=self.progress_config['complete_message']
+            )
+            raise
 
     # @app.command("/server_report")
     async def handle_report_command(self, ack, say, command):

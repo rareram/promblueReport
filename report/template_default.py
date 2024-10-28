@@ -16,7 +16,7 @@ class DefaultTemplate:
         self.logger = report_instance.logger
 
     # 보고서 생성 - default
-    async def create_report(self, target: str, time_range: str) -> str:
+    async def create_report(self, target: str, time_range: str, output_dir: str = None, request_id: str = None) -> str:
         try:
             # 시간 범위 계산
             end_time = datetime.now()
@@ -28,7 +28,7 @@ class DefaultTemplate:
                 start_time = end_time.replace(hour=0, minute=0, second=0, microsecond=0)
 
             # 출력 파일명 생성
-            output_file = self._generate_output_filename(target)
+            output_file = self.report._generate_output_filename(target, output_dir, request_id)
             workbook = Workbook(output_file)
             
             # 워크시트 생성 및 기본 설정
@@ -44,7 +44,7 @@ class DefaultTemplate:
             current_row = self._write_header_section(worksheet, formats, server_info, current_row)
             current_row = self._write_system_info_section(worksheet, formats, server_info, current_row)
             current_row = await self._write_metrics_section(worksheet, formats, target, start_time, end_time, current_row)
-            current_row = self._write_analysis_section(worksheet, formats, server_info, current_row)
+            current_row = await self._write_analysis_section(worksheet, formats, server_info, current_row)
 
             workbook.close()
             return output_file
@@ -198,16 +198,29 @@ class DefaultTemplate:
     async def _write_analysis_section(self, worksheet, formats, server_info, row):
         worksheet.merge_range(row, 0, row, 7, '시스템 분석', formats['header'])
         
-        analysis = self._get_llm_analysis(server_info)
+        try:
+            analysis = await self._get_llm_analysis(server_info)
         
-        worksheet.merge_range(row + 1, 0, row + 5, 7, analysis, formats['text'])
-        return row + 7
+            worksheet.merge_range(row + 1, 0, row + 5, 7, analysis, formats['text'])
+            return row + 7
+        except Exception as e:
+            self.logger.error(f"LLM 분석 작성 실패: {str(e)}")
+            worksheet.merge_range(row + 1, 0, row + 5, 7, "시스템 분석을 수행할 수 없습니다.", formats['text'])
+            return row + 7
 
-    def _generate_output_filename(self, target):
-        """출력 파일명 생성"""
+    # 출력 파일 생성
+    def _generate_output_filename(self, target:str) -> str:
         timestamp = datetime.now().strftime('%Y%m%d%H%M')
         prefix = self.config['files']['output_prefix']
-        return f"{prefix}_{target}_{timestamp}.xlsx"
+
+        output_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            self.config['files']['output_dir'].lstrip('../')
+        )
+        os.makedirs(output_dir, exist_ok=True)
+
+        filename = f"{prefix}_{target}_{timestamp}.xlsx"
+        return os.path.join(output_dir, filename)
 
     # 서버 정보 조회
     def _get_server_info(self, target: str)  -> Dict:
@@ -256,38 +269,46 @@ class DefaultTemplate:
     async def _get_metrics(self, target: str, start_time: datetime, end_time: datetime) -> Dict:
         try:
             metrics = {}
-            queries = self.config['prometheus_queries']
+            queries = dict(self.config['prometheus_queries'])
         
             # 각 메트릭별 데이터 조회
             for metric_name, query in queries.items():
-                # 쿼리에서 IP 치환
-                formatted_query = query.replace('{ip}', target)
-                formatted_query = formatted_query.replace('{{', '{').replace('}}', '}')
+                try:
+                    # 쿼리에서 IP 치환
+                    formatted_query = query.replace('{ip}', target)
+                    formatted_query = formatted_query.replace('{{', '{').replace('}}', '}')
             
-                # 프로메테우스에 쿼리 실행
-                prom_data = self.report.query_prometheus(
-                    formatted_query,
-                    start_time,
-                    end_time,
-                    target
-                )
-                if prom_data and 'values' in prom_data[0]:
-                    values = [float(v[1]) for v in prom_data[0]['values']]
-                    metrics[metric_name] = {
-                        'current': values[-1] if values else 0,
-                        'average': np.mean(values) if values else 0,
-                        'maximum': np.max(values) if values else 0,
-                        'minimum': np.min(values) if values else 0,
-                        'values': values
-                    }
-                else:
-                    metrics[metric_name] = {
-                        'current': 0,
-                        'average': 0,
-                        'maximum': 0,
-                        'minimum': 0,
-                        'values': []
-                    }
+                    # 프로메테우스에 쿼리 실행
+                    prom_data = await self.report.query_prometheus(
+                        formatted_query,
+                        start_time,
+                        end_time,
+                        target
+                    )
+
+                    # 결과 처리
+                    if prom_data and isinstance(prom_data, list):
+                        if len(prom_data) > 0 and 'values' in prom_data[0]:
+                            values = [float(v[1]) for v in prom_data[0]['values']]
+                            metrics[metric_name] = {
+                                'current': values[-1] if values else 0,
+                                'average': float(np.mean(values)) if values else 0,
+                                'maximum': float(np.max(values)) if values else 0,
+                                'minimum': float(np.min(values)) if values else 0,
+                                'values': values
+                            }
+                            continue
+                
+                except Exception as e:
+                    self.logger.error(f"메트릭 '{metric_name}' 조회 중 오류: {str(e)}")
+
+                metrics[metric_name] = {
+                    'current': 0,
+                    'average': 0,
+                    'maximum': 0,
+                    'minimum': 0,
+                    'values': []
+                }
             return metrics
     
         except Exception as e:
@@ -295,12 +316,14 @@ class DefaultTemplate:
             raise
 
     # LLM 호출 및 결과 수집
-    def _get_llm_analysis(self, server_info):
+    async def _get_llm_analysis(self, server_info: Dict) -> str:
         try:
             # 메트릭 데이터 준비
             end_time = datetime.now()
             start_time = end_time - timedelta(hours=24)     # 최근 24시간 데이터
-            metrics = self._get_metrics(server_info['사설IP'], start_time, end_time)
+
+            target = server_info['사설IP']
+            metrics = await self._get_metrics(target, start_time, end_time)
         
             # 분석용 컨텍스트 생성
             context = {
@@ -354,7 +377,7 @@ class DefaultTemplate:
                 
                     return analysis
                 else:
-                    self.logger.error(f"LLM 서비스 응답 실패: {response.status_code}")
+                    self.logger.error(f"LLM 분석 실패: {str(e)}")
                     return "LLM 분석을 수행할 수 없습니다."
 
             except requests.exceptions.RequestException as e:
