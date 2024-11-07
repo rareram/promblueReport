@@ -19,6 +19,7 @@ class ServerManager:
         self.filter_data = filter_data
         self.ip_pattern = re.compile(ip_pattern)
         self.hostname_pattern = re.compile(hostname_pattern)
+        self.case_sensitive = self.config['BUTTON_GENERATION'].getboolean('case_sensitive_hostname', fallback=True)
         self.logger = logging.getLogger(__name__)
 
         # report 모듈을 함수로 받지 않고 인터프리터로 실행시키기 위한 루트 지정
@@ -505,7 +506,13 @@ class ServerManager:
                 return info
             return None
         else:
-            matching_row = df[df['Hostname'] == info]
+            # 대소문자 구분 설정에 따라 호스트네임 매핑
+            if self.case_sensitive:
+                matching_row = df[df['Hostname'] == info]
+            else:
+                # 대소문자 구분하지 않는 경우
+                matching_row = df[df['Hostname'].str.lower() == info.lower()]
+            
             if not matching_row.empty:
                 return matching_row['사설IP'].iloc[0] or matching_row['공인/NAT IP'].iloc[0]
         return None
