@@ -142,7 +142,7 @@ class SimpleTemplate:
         """Generate report header section"""
         check_time = datetime.now().strftime('%Y-%m-%d %H:%M')
         return (
-            f"*서버 점검 보고서*\n"
+            f"📋 *서버 점검 보고서*\n"
             f"점검 시간: {check_time}\n"
             f"대상: {server_info['IT구성정보명']} ({server_info['서비스']})"
         )
@@ -150,7 +150,7 @@ class SimpleTemplate:
     # 서버 정보 섹션
     def _generate_basic_info(self, server_info: Dict) -> str:
         return (
-            "*기본 정보*\n"
+            "📌 *기본 정보*\n"
             f"• *ID:* {server_info['ID']}\n"
             f"• *Hostname:* {server_info['Hostname']}\n"
             f"• *IP:* {server_info['사설IP']} / {server_info['공인/NAT IP']}\n"
@@ -164,7 +164,7 @@ class SimpleTemplate:
     def _generate_metrics_info(self, metrics: Dict) -> str:
         """Generate metrics information section with visualizations"""
         try:
-            sections = ["*시스템 성능 지표*"]
+            sections = ["📊 *시스템 성능 지표*"]
             viz_config = self.config.get('visualization', {})
             
             # CPU Metrics
