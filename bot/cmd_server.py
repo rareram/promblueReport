@@ -3,6 +3,7 @@ import re
 import subprocess
 import pandas as pd
 import asyncio
+from typing import Dict, List, Any, Optional, Union
 from slack_bolt.async_app import AsyncApp
 import logging
 import glob
@@ -18,9 +19,14 @@ class ServerManager:
         self.filter_data = filter_data
         self.ip_pattern = re.compile(ip_pattern)
         self.hostname_pattern = re.compile(hostname_pattern)
+        self.case_sensitive = self.config['BUTTON_GENERATION'].getboolean('case_sensitive_hostname', fallback=True)
         self.logger = logging.getLogger(__name__)
+
+        # report 모듈을 함수로 받지 않고 인터프리터로 실행시키기 위한 루트 지정
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
         self.CSV_FILE = self.get_latest_csv_file(
-            os.path.join(os.path.dirname(__file__), config['FILES']['csv_file_dir']),
+            os.path.join(self.project_root, self.config['FILES']['csv_file_dir'].replace('./', '')),
             config['FILES']['csv_file_prefix'],
             config['FILES']['csv_file_extension']
         )
@@ -33,6 +39,20 @@ class ServerManager:
         app.command("/server_button")(self.handle_server_button_command)
         # app.action("server_info_button")(self.handle_server_info_button)
         app.action(re.compile(r"^server_info_button_\d+$"))(self.handle_server_info_button)
+
+        # Progress display 설정 로드
+        self.progress_config = {
+            'bar_char': config['PROGRESS_DISPLAY'].get('progress_bar_char', '█'),
+            'empty_char': config['PROGRESS_DISPLAY'].get('progress_empty_char', '▒'),
+            'bar_length': config['PROGRESS_DISPLAY'].getint('progress_bar_length', 10),
+            'update_interval': config['PROGRESS_DISPLAY'].getint('update_interval', 5),
+            'emojis': config['PROGRESS_DISPLAY'].get('progress_emojis', '').split(','),
+            'steps': config['PROGRESS_DISPLAY'].get('progress_steps', '').split(','),
+            'start_message': config['PROGRESS_DISPLAY'].get('start_message', '보고서 생성을 시작합니다...'),
+            'complete_message': config['PROGRESS_DISPLAY'].get('complete_message', '보고서 생성이 완료되었습니다.'),
+            'error_message': config['PROGRESS_DISPLAY'].get('error_message', '보고서 생성 중 오류가 발생했습니다.'),
+            'timeout_message': config['PROGRESS_DISPLAY'].get('timeout_message', '보고서 생성 시간이 초과되었습니다.')
+        }
     
         self.logger.info("ServerManager initialized with action handlers")
         self.logger.debug(r"Registered action handler for pattern: ^server_info_button_\d+$")
@@ -47,63 +67,219 @@ class ServerManager:
     def read_extdata_file(self, filename):
         return pd.read_csv(filename, encoding='euc-kr')
 
-    # 보고서 생성 로직
-    async def process_report(self, ip, time, channel_id, user_id, thread_ts=None):
-        self.logger.info(f"요청 <@{user_id}> 대상 서버IP {ip}")
+    # 보고서 생성 진행상태 메시지
+    async def update_progress_message(self, client, channel_id, message_ts, current_step, total_steps, step_name):
         try:
-            out_dir = os.path.join(os.path.dirname(__file__), self.config['FILES']['out_file_dir'])
-            os.makedirs(out_dir, exist_ok=True)
+            filled = int(self.progress_config['bar_length'] * current_step / total_steps)
+            bar = (self.progress_config['bar_char'] * filled + 
+                   self.progress_config['empty_char'] * (self.progress_config['bar_length'] - filled))
+            percentage = int(100 * current_step / total_steps)
         
-            request_id = f"{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-            command = [
-                "python3",
-                os.path.join(os.path.dirname(__file__), "..", "report", "promblueReport.py"),
-                "--target", ip,
-                "--output", out_dir,
-                "--request-id", request_id
-            ]
-            if time:
-                command.extend(["--time", time])
+            # emojis = self.progress_config['emojis']
+            emoji = self.progress_config['emojis'][current_step % len(self.progress_config['emojis'])]
         
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=self.config['QUEUE'].getint('timeout', fallback=300)
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=f"보고서 생성 중입니다... {emoji}\n"
+                     f"진행 단계: {step_name}\n"
+                     f"진행률: {bar} {percentage}%"
+                # thread_ts=message_ts
             )
-        
-            output_file = next((line.split(": ")[1].strip() for line in result.stdout.split('\n') if line.startswith("Report generated successfully:")), None)
-        
-            if output_file and os.path.exists(output_file):
-                time_display = "오늘 0시부터 현재까지" if time == 'today' else time
-                # await app.client.files_upload(
-                await self.app.client.files_upload_v2(
-                    channels=channel_id,
-                    file=output_file,
-                    initial_comment=f"<@{user_id}> {ip}에 대한 {time_display} 기간의 보고서입니다.",
-                    thread_ts=thread_ts
-                )
-                await self.app.client.chat_postMessage(
-                    channel=channel_id,
-                    text=f"<@{user_id}> 보고서가 성공적으로 업로드되었습니다.",
-                    thread_ts=thread_ts
-                )
-                self.logger.info(f"완료 <@{user_id}> 대상 서버IP {ip}")
-            else:
-                await self.app.client.chat_postMessage(
-                    channel=channel_id,
-                    text=f"<@{user_id}> 보고서 파일을 생성하지 못했습니다.",
-                    thread_ts=thread_ts
-                )
-                self.logger.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 파일 생성 실패")
-        except subprocess.TimeoutExpired:
-            await self.app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서 생성 시간이 초과되었습니다.")
-            self.logger.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 시간 초과")
         except Exception as e:
-            await self.app.client.chat_postMessage(channel=channel_id, text=f"<@{user_id}> 보고서 생성 중 오류가 발생했습니다: {str(e)}")
-            self.logger.error(f"실패 <@{user_id}> 대상 서버IP {ip} - 오류: {str(e)}")
+            self.logger.error(f"Progress update failed: {str(e)}")
+            # pass
+
+    # 프로세스 출력 처리
+    async def _handle_process_output(self, stdout: str, stderr: str, channel_id: str, message_ts: str) -> Dict:
+        try:
+            # 마크다운 결과와 분석 결과 분리
+            parts = stdout.split('\n\nAnalysis:', 1)
+            report = parts[0].strip()
+            analysis = parts[1].strip() if len(parts) > 1 else None
+
+            return {
+                'success': True,
+                'report': report,
+                'analysis': analysis
+            }
+        except Exception as e:
+            self.logger.error(f"Failed to process output: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    # async def _handle_slack_messages(self, result: Dict, channel_id: str, initial_message_ts: str, user_id: str, thread_ts: str = None):
+    async def _handle_slack_messages(self, result, channel_id, initial_message_ts: str, progress_message_ts: str, user_id: str, thread_ts: str = None):
+        try:
+            if result['success']:
+                # 시스템 지표는 메인 메시지에 업데이트
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=initial_message_ts,
+                    text=result['report']
+                )
+
+                # LLM 분석 결과는 progress_message의 스레드로 추가
+                if result.get('analysis'):
+                    await self.app.client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=progress_message_ts,
+                        text=f"*시스템 분석:*\n{result['analysis']}"
+                    )
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=initial_message_ts,
+                    text=f"보고서 생성 실패. {self.progress_config['error_message']}"
+                )
+                await self.app.client.chat_postMessage(
+                    channel=channel_id,
+                    # thread_ts=initial_message_ts,
+                    thread_ts=progress_message_ts,
+                    text=f"<@{user_id}> {self.progress_config['error_message']}: {error_msg}"
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to send Slack messages: {str(e)}")
+
+    # 보고서 생성 로직
+    async def process_report(self, ip, command, channel_id, user_id, thread_ts=None, time='today'):
+        self.logger.info(f"요청 <@{user_id}> 대상 서버IP {ip}")
+        progress_task = None
+
+        try:
+            # 초기 메시지 표시
+            initial_message = await self.app.client.chat_postMessage(
+                channel=channel_id,
+                text=f"<@{user_id}> 시스템 지표를 수집하는 중입니다..."
+            )
+
+            # Excel 보고서 요청일 때만 프로그레스바 표시
+            if thread_ts:
+                progress_message = await self.app.client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,  # 스레드에 표시
+                    text=f"{self.progress_config['start_message']}\n"
+                         f"진행 단계: {self.progress_config['steps'][0]}\n"
+                         f"진행률: {self.progress_config['bar_char']} 0%"
+                )
+            
+                progress_task = asyncio.create_task(self.progress_updates(
+                    self.app.client, 
+                    channel_id, 
+                    progress_message['ts'], 
+                    self.progress_config['steps']
+                ))
+
+            # 프로세스 실행
+            process = await asyncio.subprocess.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.project_root,
+                env={**os.environ, 'PYTHONPATH': self.project_root}
+            )
+
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, command, stderr.decode('utf-8', errors='replace'))
+
+            stdout_text = stdout.decode('utf-8', errors='replace').strip()
+
+            if thread_ts:  # Excel 보고서 요청
+                for line in stdout_text.split('\n'):
+                    if line.startswith("Report generated successfully:"):
+                        output_file = line.split(": ", 1)[1].strip()
+                        if os.path.exists(output_file):
+                            time_display = "오늘 0시부터 현재까지" if time == 'today' else time
+                            await self.app.client.files_upload_v2(
+                                channel=channel_id,
+                                file=output_file,
+                                initial_comment=f"<@{user_id}> {ip}에 대한 {time_display} 기간의 보고서입니다.",
+                                thread_ts=thread_ts
+                            )
+                        break
+                # 프로그레스바 완료 메시지
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=progress_message['ts'],
+                    text=self.progress_config['complete_message']
+                )
+            else:  # 시스템 지표 요청
+                parts = stdout_text.split('\n\nAnalysis:', 1)
+                report = parts[0].strip()
+
+                # 시스템 지표 즉시 업데이트
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=initial_message['ts'],
+                    text=report
+                )
+
+                # LLM 분석이 있는 경우 스레드에 추가
+                if len(parts) > 1:
+                    analysis = parts[1].strip()
+                    await self.app.client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=initial_message['ts'],  # 시스템 지표의 스레드로
+                        text=f"*시스템 분석:*\n{analysis}"
+                    )
+
+        except Exception as e:
+            self.logger.error(f"Error in process_report: {str(e)}")
+            error_message = f"오류가 발생했습니다: {str(e)}"
+        
+            if thread_ts:  # Excel 보고서 실패
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=progress_message['ts'],
+                    text=f"{self.progress_config['error_message']}\n{error_message}"
+                )
+            else:  # 시스템 지표 실패
+                await self.app.client.chat_update(
+                    channel=channel_id,
+                    ts=initial_message['ts'],
+                    text=f"시스템 지표 수집 실패: {error_message}"
+                )
+            return
+
+        finally:
+            if progress_task and not progress_task.done():
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
+
+        
+    # 주기적으로 진행 상태 업데이트
+    async def progress_updates(self, client, channel_id, message_ts, steps):
+        try:
+            delay_per_step = int(self.progress_config['update_interval'])
+            total_steps = len(steps)
+
+            for i, step in enumerate(steps, 1):
+                await self.update_progress_message(
+                    client, channel_id, message_ts, i, total_steps, step
+                )
+                await asyncio.sleep(delay_per_step)
+
+                # if i == len(steps) - 1:
+                    # await asyncio.sleep(delay_per_step * 2)
+
+        except asyncio.CancelledError:
+            # 보고서 생성이 완료되면 마지막 상태 업데이트
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=self.progress_config['complete_message']
+            )
+            raise
+        except Exception as e:
+            self.logger.error(f"Error in progress_updates: {str(e)}")
+            raise
 
     # @app.command("/server_report")
     async def handle_report_command(self, ack, say, command):
@@ -113,23 +289,57 @@ class ServerManager:
             await say("명령어 실행 권한이 없습니다.")
             return
     
-        match = re.match(r'(\S+)(?:\s+(\S+))?', command['text'])
-        if not match:
-            await say("잘못된 형식입니다. 사용법: /report <IP> [기간옵션; 1d, 7d]")
-            self.logger.warning(f"잘못된 형식 요청 <@{command['user_id']}> 텍스트: {command['text']}")
+        args = command['text'].split()
+        if not args:
+            await say("잘못된 형식입니다. 사용법: /server_report <IP> [excel|24h|7d]")
             return
     
-        ip, time = match.groups()
-        time = time or 'today'
+        ip = args[0]
+        option = args[1] if len(args) > 1 else 'simple'  # 슬랙봇에서의 기본값: simple (마크다운)
+    
+        self.logger.info(f"요청 접수 <@{command['user_id']}> 대상 서버IP {ip} 옵션 {option}")
 
-        self.logger.info(f"요청 접수 <@{command['user_id']}> 대상 서버IP {ip} 기간 {time}")
+        use_thread = False
+        template = 'simple'
+        time_range = 'today'
 
-        use_thread = self.config['THREAD_OPTIONS'].getboolean('server_report_thread', fallback=False)
+        if option == 'excel':
+            template = 'default'  # Excel 보고서
+            use_thread = True     # 스레드 사용
+        elif option in ['24h', '7d']:
+            time_range = option
+    
         initial_message = await say(f"<@{command['user_id']}> 보고서 생성 요청을 받았습니다. 처리 중입니다...")
-
         thread_ts = initial_message['ts'] if use_thread else None
-        asyncio.create_task(self.process_report(ip, time, command['channel_id'], command['user_id'], thread_ts))
 
+        # 실행 명령 구성
+        python_interpreter = os.path.join(self.project_root, self.config['FILES']['venv_path'].replace('./', ''), 'bin', 'python')
+        report_script = os.path.join(self.project_root, 'report', 'promblueReport.py')
+        report_config = os.path.join(self.project_root, 'report', 'promblueReport.yml')  # .yml 사용
+        out_dir = os.path.join(self.project_root, self.config['FILES']['out_file_dir'].replace('./', ''))
+
+        os.makedirs(out_dir, exist_ok=True)
+        request_id = f"{command['user_id']}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        cmd_args = [
+            python_interpreter,
+            report_script,
+            '--target', ip,
+            '--output', out_dir,
+            '--request-id', request_id,
+            '--config', report_config,
+            '--template', template,
+            '--time', time_range
+        ]
+
+        asyncio.create_task(self.process_report(
+            ip=ip, 
+            command=cmd_args,
+            channel_id=command['channel_id'],
+            user_id=command['user_id'],
+            thread_ts=thread_ts,
+            time=time_range
+        ))
         self.logger.info(f"Command executed: {command['command']} - User: {command['user_id']} ({command.get('user_email')}) - Group: {user_group} - Params: {command['text']}")
 
     # 명령어 처리 로직 - csv 에서 정보 조회
@@ -225,6 +435,7 @@ class ServerManager:
                 await say("추출된 정보에서 유효한 IP를 찾을 수 없습니다.")
                 return
 
+            text_content = f"상위 {message_limit}개의 메시지에서 추출한 IP:"
             blocks = [
                 {
                     "type": "section",
@@ -237,7 +448,7 @@ class ServerManager:
             ]
 
             if unmapped_hostnames or unmapped_ips:
-                unmapped_text = f"※ 참조파일: `{self.CSV_FILE_NAME}`\n"
+                unmapped_text = f"※ _참조파일: `{self.CSV_FILE_NAME}`_\n"
                 if unmapped_hostnames:
                     unmapped_text += "*매핑되지 않은 Hostname:*\n" + "\n".join(f"• {hostname}" for hostname in unmapped_hostnames)
                 if unmapped_ips:
@@ -252,7 +463,9 @@ class ServerManager:
                     ]
                 })
 
-            await say(blocks=blocks)
+                text_content += f"\n\n{unmapped_text}"
+
+            await say(text=text_content, blocks=blocks)
 
         except Exception as e:
             self.logger.error(f"Error in handle_server_button_command: {str(e)}", exc_info=True)
@@ -293,7 +506,13 @@ class ServerManager:
                 return info
             return None
         else:
-            matching_row = df[df['Hostname'] == info]
+            # 대소문자 구분 설정에 따라 호스트네임 매핑
+            if self.case_sensitive:
+                matching_row = df[df['Hostname'] == info]
+            else:
+                # 대소문자 구분하지 않는 경우
+                matching_row = df[df['Hostname'].str.lower() == info.lower()]
+            
             if not matching_row.empty:
                 return matching_row['사설IP'].iloc[0] or matching_row['공인/NAT IP'].iloc[0]
         return None

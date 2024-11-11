@@ -4,10 +4,12 @@ app_token = xapp-your-slack-app-token
 bot_token = xoxb-your-slack-bot-token
 
 [FILES]
-csv_file_dir = ../data
+csv_file_dir = ./data
 csv_file_prefix = 구성관리조회
 csv_file_extension = .csv
-out_file_dir = ../output
+out_file_dir = ./output
+venv_path = ./venv
+python_interpreter = bin/python
 
 [LOGGING]
 log_file_dir = ../output
@@ -24,7 +26,7 @@ admin_domains =
 admin_slack_ids = 
 user_domains = skshieldus.com
 user_slack_ids =
-guest_domains = partner.sk.com, gmail.com
+guest_domains = partner.sk.com
 guest_slack_ids = 
 
 [COMMAND_PERMISSIONS]
@@ -66,6 +68,19 @@ extract_ips_limit = 5
 
 [DATA_FILTERING]
 filtered_columns = 담당자 연락처, HW 관리자, SW 관리자, HW 담당자(정), HW 담당자(부), SW 담당자(정), SW 담당자(부), 유지보수담당자
+
+
+[PROGRESS_DISPLAY]
+progress_bar_char = █
+progress_empty_char = ▒
+progress_bar_length = 10
+update_interval = 5
+progress_emojis = 📊,📈,📑,📋,📝,🔍,📌,📎,📏,📐
+progress_steps = 서버 정보 수집 중,시스템 메트릭 수집 중,성능 데이터 분석 중,보안 정보 확인 중,보고서 템플릿 준비 중,분석 결과 작성 중,보고서 파일 생성 중
+start_message = 보고서 생성을 시작합니다... 🚀
+complete_message = 보고서 생성이 완료되었습니다. ✨
+error_message = 보고서 생성 중 오류가 발생했습니다. ❌
+timeout_message = 보고서 생성 시간이 초과되었습니다. ⏰
 
 #################### CMD_CHECK_WEB ####################
 # [WEB_SERVICES_*] 형식을 맞춰주고, 슬랙에서 슬래시 명령어 구분하면 그룹 나누기 가능

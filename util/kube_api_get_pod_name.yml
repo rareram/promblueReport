@@ -1,0 +1,4 @@
+# kube_api_get_pod_name.yml
+kube_api:
+  url: "https://<kube-api-server>/api/v1/pods"
+  token: "<your-token>"

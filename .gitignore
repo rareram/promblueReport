@@ -166,3 +166,7 @@ cython_debug/
 구성관리조회*.csv
 *.conf
 slrepoBot.log.*
+*.zip
+*.yml
+*.yaml
+nohup.out

@@ -1,0 +1,359 @@
+########## 파일 관련 설정 ##############################
+files:
+  data_dir: ../data
+  output_dir: ../output
+  extdata_prefix: 구성관리조회
+  output_prefix: 서버진단보고서
+
+logging:
+  log_file: ../output/promblueReport.log
+  log_level: INFO
+  log_max_bytes: 1048576
+  log_backup_count: 5
+
+########## 큐 설정 ##############################
+queue:
+  use_queue: false
+  redis:
+    host: localhost
+    port: 6379
+    db: 0
+  timeout: 300
+
+########## LLM 설정 ##############################
+ollama:
+  model: llama3.2
+  url: http://localhost:11434/api/generate
+  # url: http://172.24.203.190:11434/api/generate
+  # url: http://192.168.104.190:11434/api/generate
+  timeout: 300
+
+prompt:
+  system_analysis: 당신은 비판적인 시스템 분석 전문가이다. metric dump 지표를 보고 '(1) 시스템 상태 종합의견', '(2) 조치 권장사항' 을 한글로 작성하며 마크다운 문법 없이 Plain Text로 작성
+  simple_analysis: 비판적인 시스템 분석 전문가로서 metric을 분석하고 특이점만 객관적인 사실에 근거해서 150byte 정도 분량의 한글로 평가글을 써줘. text format은 *bold* 형식으로 해.
+  secrity_analysis: 당신은 보안 전문가이다. 서버 지표를 보고 잠재적 보안위협을 식별하고 권장사항을 작성
+
+########## 그라파나 애코시스템 ##############################
+grafana:
+  url: http://localhost:3000
+
+loki:
+  url: http://localhost:3100
+  logql:
+
+prometheus:
+  # url: http://localhost:9090
+  url: http://172.24.203.190:9090
+  # url: http://192.168.104.190:9090
+  # url: http://10.250.250.31:9090
+  batch_query: true
+  query_timeout: 30
+  step_interval: 1h
+  promql:
+    # CPU metrics
+    cpu_usage: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle", instance="{ip}:9100"}[5m])) * 100)
+    cpu_load1: node_load1{instance="{ip}:9100"}
+    cpu_load5: node_load5{instance="{ip}:9100"}
+    cpu_load15: node_load15{instance="{ip}:9100"}
+    
+    # Memory metrics
+    memory_usage: |
+      100 * (1 - ((avg_over_time(node_memory_MemFree_bytes{instance="{ip}:9100"}[5m]) + 
+      avg_over_time(node_memory_Cached_bytes{instance="{ip}:9100"}[5m]) + 
+      avg_over_time(node_memory_Buffers_bytes{instance="{ip}:9100"}[5m])) / 
+      avg_over_time(node_memory_MemTotal_bytes{instance="{ip}:9100"}[5m])))
+    memory_total: node_memory_MemTotal_bytes{instance="{ip}:9100"}
+    memory_available: node_memory_MemAvailable_bytes{instance="{ip}:9100"}
+    
+    # Disk metrics
+    disk_usage: 100 - 100 * (sum(node_filesystem_free_bytes{instance="{ip}:9100",fstype!="tmpfs"}) / sum(node_filesystem_size_bytes{instance="{ip}:9100",fstype!="tmpfs"}))
+    disk_read: sum(rate(node_disk_read_bytes_total{instance="{ip}:9100", device!~"sr[0-9]*|loop[0-9]*|dm-[0-9]*"}[5m]))
+    disk_write: sum(rate(node_disk_written_bytes_total{instance="{ip}:9100", device!~"sr[0-9]*|loop[0-9]*|dm-[0-9]*"}[5m]))
+    # disk_read: rate(node_disk_read_bytes_total{instance="{ip}:9100"}[5m])
+    # disk_write: rate(node_disk_written_bytes_total{instance="{ip}:9100"}[5m])
+    
+    # Network metrics
+    network_receive: sum(rate(node_network_receive_bytes_total{instance="{ip}:9100", device!="lo"}[5m]))
+    network_transmit: sum(rate(node_network_transmit_bytes_total{instance="{ip}:9100", device!="lo"}[5m]))
+    network_receive_phy: sum(rate(node_network_receive_bytes_total{instance="{ip}:9100", device!~"lo|docker.*|veth.*|br.*|virbr.*"}[5m]))
+    network_transmit_phy: sum(rate(node_network_transmit_bytes_total{instance="{ip}:9100", device!~"lo|docker.*|veth.*|br.*|virbr.*"}[5m]))
+    # network_receive: rate(node_network_receive_bytes_total{instance="{ip}:9100"}[5m])
+    # network_transmit: rate(node_network_transmit_bytes_total{instance="{ip}:9100"}[5m])
+
+########## 임계값 기준 설정 ##############################
+thresholds:
+  cpu:
+    warning: 70
+    critical: 90
+
+  memory:
+    warning: 80
+    critical: 90
+  disk:
+    warning: 80
+    critical: 90
+  load:
+    warning: 5
+    critical: 10
+
+########## 메트릭 시각화 설정 ##############################
+visualization:
+  # 게이지 바 설정
+  gauge:
+    width: 10              # 게이지 바 길이
+    chars:
+      filled: █           # 채워진 부분
+      empty: ▒           # 비어있는 부분
+    colors:
+      normal: '4CAF50'    # 정상 상태 색상
+      warning: 'FFEB3B'   # 경고 상태 색상
+      critical: 'FF5252'  # 위험 상태 색상
+
+  # 트렌드(추세) 표시 설정
+  trend:
+    chars: ▁▂▃▄▅▆▇█      # 추세선용 문자
+    width: 8             # 추세선 길이
+    style: braille       # braille 또는 blocks
+    colors:
+      up: '4CAF50'       # 상승 추세
+      down: '2196F3'     # 하강 추세
+      flat: '9E9E9E'     # 평탄 추세
+
+  # 슬랙용 게이지 설정
+  slack_gauge:
+    width: 10
+    chars:
+      filled: ■          # 슬랙에서 더 잘 보이는 문자 사용
+      empty: □
+    prefix: ''           # 게이지 바 앞에 붙일 문자
+    suffix: ''           # 게이지 바 뒤에 붙일 문자
+
+  # 슬랙용 트렌드 설정
+  slack_trend:
+    width: 8
+    chars: ▁▂▃▄▅▆▇█
+    indicators:
+      up: ⬆︎            # 상승 표시
+      down: ⬇︎          # 하강 표시
+      flat: ➡︎          # 평탄 표시
+
+  # 숫자 포맷 설정
+  number_format:
+    decimal_places: 1    # 소수점 자리수
+    units:
+      bytes: ['B', 'KB', 'MB', 'GB', 'TB']
+      bits: ['b', 'Kb', 'Mb', 'Gb', 'Tb']
+      time: ['ms', 's', 'm', 'h', 'd']
+    separators:
+      thousands: ','
+      decimal: '.'
+
+  # 그래프 스타일
+  graph_style:
+    excel:              # 엑셀 보고서용
+      use_colors: true
+      min_column_width: 10
+      row_height: 20
+    
+    slack:              # 슬랙 출력용
+      use_emojis: true
+      compact: true
+      align: right
+
+########## 레이아웃 설정 ##############################
+layouts:
+  logo:
+    enabled: true
+    image: sk_shieldus_comm_rgb_en.png
+    position: top-right
+    size:
+      width: 150
+      height: 71
+    margin:
+      top: 5
+      right: 10
+    offset:
+      x: 0
+      y: 0
+
+  background:
+    enabled: false
+    image: brand-logo-mofit01_sm.png
+    opacity: 0.3
+    size:
+      width: 500
+      height: 700
+    position:
+      x: 50
+      y: 50
+
+  page:
+    size: A4
+    orientation: portrait
+    margins:
+      top: 10
+      right: 10
+      bottom: 10
+      left: 10
+
+  sections:
+    header:
+      height: 60
+    
+    basic_info:
+      start_row: 2
+      height: 120
+      grid:
+        columns: 3
+        row_height: 25
+    
+    metrics:
+      start_row: 8
+      height: 200
+      groups:
+        - name: basic
+          layout: vertical
+          height: 120
+        - name: performance
+          layout: grid
+          columns: 2
+          height: 80
+    
+    llm_analysis:
+      start_row: 18
+      height: 80
+      columns: 2
+      merge_if_short: true
+
+########## 스타일 설정 ##############################
+styles:
+  fonts:
+    families:
+      default:
+        name: Noto Sans KR
+        fallback: Arial
+      english:
+        name: Arial
+        fallback: Helvetica
+      monospace:
+        name: D2Coding
+        fallback: Consolas
+    
+    sizes:
+      title:
+        h1: 16
+        h2: 14
+        h3: 12
+      content:
+        large: 11
+        normal: 9
+        small: 8
+    
+    weights:
+      light: 300
+      normal: 400
+      medium: 500
+      bold: 700
+    
+    styles:
+      normal: normal
+      italic: italic
+
+  colors:
+    brand:
+      primary: '1976D2'
+      secondary: '424242'
+      accent: '82B1FF'
+    
+    background:
+      header: 'F5F5F5'
+      subheader: 'E0E0E0'
+      alternate: 'FAFAFA'
+    
+    status:
+      success: '4CAF50'
+      info: '2196F3'
+      warning: 'FFC107'
+      error: 'F44336'
+      critical: 'D32F2F'
+    
+    text:
+      primary: '212121'
+      secondary: '757575'
+      disabled: 'BDBDBD'
+      inverse: 'FFFFFF'
+
+  borders:
+    width:
+      thin: 1
+      medium: 2
+      thick: 3
+    
+    style:
+      solid: solid
+      dashed: dashed
+      dotted: dotted
+    
+    colors:
+      light: 'E0E0E0'
+      normal: '9E9E9E'
+      dark: '616161'
+
+formats:
+  title:
+    font:
+      family: ${styles.fonts.families.default.name}
+      size: ${styles.fonts.sizes.title.h1}
+      weight: ${styles.fonts.weights.bold}
+    alignment:
+      horizontal: center
+      vertical: center
+    border:
+      width: ${styles.borders.width.thin}
+      style: ${styles.borders.style.solid}
+      color: ${styles.borders.colors.normal}
+    background: ${styles.colors.background.header}
+    # height: 40
+
+  header:
+    font:
+      family: ${styles.fonts.families.default.name}
+      size: ${styles.fonts.sizes.title.h2}
+      bold: true
+    alignment:
+      horizontal: center
+      vertical: center
+    background: ${styles.colors.background.header}
+    border: 1
+    # height: 30
+
+  text:
+    font:
+      family: ${styles.fonts.families.default.name}
+      size: ${styles.fonts.sizes.content.normal}
+    alignment:
+      horizontal: left
+      vertical: center
+    border: 1
+
+  metric:
+    font:
+      family: ${styles.fonts.families.english.name}
+      size: ${styles.fonts.sizes.content.normal}
+    alignment:
+      horizontal: right
+      vertical: center
+    format:
+      number: '0.00'
+    border: 1
+    # height: 25
+
+  metric_warning:
+    extends: metric
+    background: ${styles.colors.status.warning}
+
+  metric_critical:
+    extends: metric
+    background: ${styles.colors.status.critical}
+    font:
+      color: ${styles.colors.text.inverse}
