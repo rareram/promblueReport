@@ -22,105 +22,13 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.37 (2024.11.11)'
-
-class NetworkChecker:
-    def __init__(self, logger):
-        self.logger = logger
-        self.slack_endpoints = [
-            'api.slack.com',
-            'wss-primary.slack.com',
-            'wss-backup.slack.com',
-            'slack.com'
-        ]
-    
-    # Slack 엔드포인트 연결 체크
-    async def check_connections(self):
-        results = {}
-        for endpoint in self.lack_endpoints:
-            results[endpoint] = await self._check_endpoint(endpoint)
-        return results
-    
-    # 개별 엔드포인트 연결 체크
-    async def _check_endpoint(self, endpoint):
-        try:
-            # DNS 확인
-            try:
-                ip = socket.gethostbyname(endpoint)
-                self.logger.info(f"DNS Resolution - {endpoint} -> {ip}")
-            except socket.gaierror as e:
-                self.logger.error(f"DNS Resolution failed for {endpoint}: {str(e)}")
-                return False
-            
-            # HTTPS 연결 테스트
-            if not endpoint.startswith('wss'):
-                try:
-                    response = requests.get(f'https://{endpoint}', timeout=5)
-                    self.logger.info(f"HTTPS Connection to {endpoint} successful: {response.status_code}")
-                except requests.exceptions.RequestException as e:
-                    self.logger.error(f"HTTPS Connection failed to {endpoint}: {str(e)}")
-                    return False
-
-            # WebSocket 연결 테스트 (wss 로 시작)
-            if endpoint.startswith('wss'):
-                try:
-                    uri = f"wss://{endpoint}"
-                    async with websockets.connect(uri, ssl=True) as websocket:
-                        self.logger.info(f"WebSocket Connection to {endpoint} successful")
-                except Exception as e:
-                    self.logger.error(f"WebSocket Connection failed to {endpoint}: {str(e)}")
-                    return False
-
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Connection check failed for {endpoint}: {str(e)}")
-            return False
-
-class SlackConnectionMonitor:
-    def __init__(self, app: AsyncApp):
-        self.app = app
-        self.logger = app.client.logger
-        self.network_checker = NetworkChecker(self.logger)
-        
-        self.setup_connection_monitoring()
-
-    # 연결 상태 모니터링 설정
-    def setup_connection_monitoring(self):
-        self.app.client.web_client.session.hooks['response'] = [self.log_request_response]
-        
-    # HTTP 요청/응답 로깅
-    def log_request_response(self, response, *args, **kwargs):
-        try:
-            request = response.request
-            self.logger.debug(f"""
-                Request:
-                - URL: {request.url}
-                - Method: {request.method}
-                - Headers: {request.headers}
-                
-                Response:
-                - Status: {response.status_code}
-                - Headers: {response.headers}
-                - Time: {response.elapsed.total_seconds():.2f}s
-            """)
-            
-            # 응답 시간이 너무 긴 경우 경고
-            if response.elapsed.total_seconds() > 5:
-                self.logger.warning(f"Slow response from {request.url}: {response.elapsed.total_seconds():.2f}s")
-                
-            # 연결 실패나 타임아웃 감지
-            if response.status_code >= 500:
-                self.logger.error(f"Server error from Slack API: {response.status_code}")
-            elif response.status_code == 429:
-                self.logger.warning("Rate limit hit on Slack API")
-                
-        except Exception as e:
-            self.logger.error(f"Error in request/response logging: {str(e)}")
+__version__ = '0.6.38 (2024.11.11)'
 
 class slrepoBot:
     def __init__(self):
         self.config = self.setup_config_and_logging()
+        self.logger = logging.getLogger(__name__)
+
         self.app = AsyncApp(token=self.config['SLACK']['bot_token'])
         self.queue = self.setup_queue()
         self.connection_monitor = None
@@ -252,24 +160,129 @@ class slrepoBot:
         handler = AsyncSocketModeHandler(self.app, self.config['SLACK']['app_token'])
         try:
             # 연결 모니터링 초기화 및 초기 연결 체크
-            self.connection_monitor = SlackConnectionMonitor(self.app)
-            connection_status = await self.connection_monitor.network_checker.check_connections()
+            try:
+                # logger 전달 추가
+                self.connection_monitor = SlackConnectionMonitor(self.app, self.logger)
+                connection_status = await self.connection_monitor.network_checker.check_connections()
             
-            # 연결 상태 로깅
-            for endpoint, status in connection_status.items():
-                if status:
-                    logging.info(f"Successfully connected to {endpoint}")
-                else:
-                    logging.error(f"Failed to connect to {endpoint}")
-
+                # 연결 상태 로깅
+                for endpoint, status in connection_status.items():
+                    if status:
+                        self.logger.info(f"Successfully connected to {endpoint}")
+                    else:
+                        self.logger.error(f"Failed to connect to {endpoint}")
+            except Exception as e:
+                self.logger.error(f"Failed to initialize connection monitor: {str(e)}")
+        
             await handler.start_async()
-            logging.info(f"채찍PT봇 v{__version__} 구동중!")
+            self.logger.info(f"채찍PT봇 v{__version__} 구동중!")
             while True:
                 await asyncio.sleep(3600)
+        except Exception as e:
+            self.logger.error(f"Error in bot execution: {str(e)}")
         finally:
-            await handler.close()
-            if self.app.client.session:
+            try:
+                # close() 대신 stop_async() 사용
+                await handler.stop_async()
+            except Exception as e:
+                self.logger.error(f"Error while stopping handler: {str(e)}")
+        
+            if hasattr(self.app.client, 'session') and self.app.client.session:
                 await self.app.client.session.close()
+
+class NetworkChecker:
+    def __init__(self, logger):
+        self.logger = logger
+        self.slack_endpoints = [
+            'api.slack.com',
+            'wss-primary.slack.com',
+            'wss-backup.slack.com',
+            'slack.com'
+        ]
+    
+    # Slack 엔드포인트 연결 체크
+    async def check_connections(self):
+        results = {}
+        for endpoint in self.lack_endpoints:
+            results[endpoint] = await self._check_endpoint(endpoint)
+        return results
+    
+    # 개별 엔드포인트 연결 체크
+    async def _check_endpoint(self, endpoint):
+        try:
+            # DNS 확인
+            try:
+                ip = socket.gethostbyname(endpoint)
+                self.logger.info(f"DNS Resolution - {endpoint} -> {ip}")
+            except socket.gaierror as e:
+                self.logger.error(f"DNS Resolution failed for {endpoint}: {str(e)}")
+                return False
+            
+            # HTTPS 연결 테스트
+            if not endpoint.startswith('wss'):
+                try:
+                    response = requests.get(f'https://{endpoint}', timeout=5)
+                    self.logger.info(f"HTTPS Connection to {endpoint} successful: {response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    self.logger.error(f"HTTPS Connection failed to {endpoint}: {str(e)}")
+                    return False
+
+            # WebSocket 연결 테스트 (wss 로 시작)
+            if endpoint.startswith('wss'):
+                try:
+                    uri = f"wss://{endpoint}"
+                    async with websockets.connect(uri, ssl=True) as websocket:
+                        self.logger.info(f"WebSocket Connection to {endpoint} successful")
+                except Exception as e:
+                    self.logger.error(f"WebSocket Connection failed to {endpoint}: {str(e)}")
+                    return False
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Connection check failed for {endpoint}: {str(e)}")
+            return False
+
+class SlackConnectionMonitor:
+    def __init__(self, app: AsyncApp, logger):
+        self.app = app
+        self.logger = logger
+        self.network_checker = NetworkChecker(self.logger)
+        
+        self.setup_connection_monitoring()
+
+    # 연결 상태 모니터링 설정
+    def setup_connection_monitoring(self):
+        self.app.client.web_client.session.hooks['response'] = [self.log_request_response]
+        
+    # HTTP 요청/응답 로깅
+    def log_request_response(self, response, *args, **kwargs):
+        try:
+            request = response.request
+            self.logger.debug(f"""
+                Request:
+                - URL: {request.url}
+                - Method: {request.method}
+                - Headers: {request.headers}
+                
+                Response:
+                - Status: {response.status_code}
+                - Headers: {response.headers}
+                - Time: {response.elapsed.total_seconds():.2f}s
+            """)
+            
+            # 응답 시간이 너무 긴 경우 경고
+            if response.elapsed.total_seconds() > 5:
+                self.logger.warning(f"Slow response from {request.url}: {response.elapsed.total_seconds():.2f}s")
+                
+            # 연결 실패나 타임아웃 감지
+            if response.status_code >= 500:
+                self.logger.error(f"Server error from Slack API: {response.status_code}")
+            elif response.status_code == 429:
+                self.logger.warning("Rate limit hit on Slack API")
+                
+        except Exception as e:
+            self.logger.error(f"Error in request/response logging: {str(e)}")
 
 # 메인 애플리케이션 로직
 async def main():
