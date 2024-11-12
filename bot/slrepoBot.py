@@ -22,11 +22,12 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.38 (2024.11.11)'
+__version__ = '0.6.45 (2024.11.12)'
 
 class slrepoBot:
-    def __init__(self):
-        self.config = self.setup_config_and_logging()
+    def __init__(self, provided_config=None):
+        # self.config = self.setup_config_and_logging()
+        self.config = provided_config if provided_config else self.setup_config_and_logging()
         self.logger = logging.getLogger(__name__)
 
         self.app = AsyncApp(token=self.config['SLACK']['bot_token'])
@@ -284,9 +285,115 @@ class SlackConnectionMonitor:
         except Exception as e:
             self.logger.error(f"Error in request/response logging: {str(e)}")
 
+class MultiWorkspaceBot:
+    def __init__(self):
+        self.config = self.setup_config_and_logging()
+        self.logger = logging.getLogger(__name__)
+        self.workspace_bots = {}
+
+    def setup_config_and_logging(self):
+        config = configparser.ConfigParser(interpolation=None)
+        config.read('slrepoBot.conf')
+        
+        log_dir = os.path.join(os.path.dirname(__file__), config['LOGGING']['log_file_dir'])
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, config['LOGGING']['log_file'])
+        log_max_bytes = config['LOGGING'].getint('log_max_bytes')
+        log_backup_count = config['LOGGING'].getint('log_backup_count')
+
+        handler = RotatingFileHandler(
+            log_file,
+            maxBytes=log_max_bytes,
+            backupCount=log_backup_count
+        )
+        logging.basicConfig(
+            handlers=[handler],
+            level=getattr(logging, config['LOGGING']['log_level']),
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+
+        return config
+
+    def create_workspace_config(self, workspace):
+        workspace_config = configparser.ConfigParser(interpolation=None)
+        workspace_config.read('slrepoBot.conf')
+        
+        # SLACK 섹션 생성 및 워크스페이스별 토큰 설정
+        workspace_config['SLACK'] = {
+            'app_token': self.config[f'SLACK_{workspace}']['app_token'],
+            'bot_token': self.config[f'SLACK_{workspace}']['bot_token']
+        }
+
+        # ACCESS_CONTROL 섹션도 워크스페이스별로 설정
+        if f'ACCESS_CONTROL_{workspace}' in self.config:
+            workspace_config['ACCESS_CONTROL'] = dict(self.config[f'ACCESS_CONTROL_{workspace}'])
+        
+        return workspace_config
+    
+    async def run(self):
+        enabled_workspaces = self.config['SLACK_WORKSPACES']['enabled_workspaces'].split(', ')
+        handlers = []
+
+        try:
+            # 각 워크스페이스별로 slrepoBot 인스턴스 생성
+            for workspace in enabled_workspaces:
+                try:
+                    self.logger.info(f"Starting initialization for warkspace: {workspace}")
+                    workspace_config = self.create_workspace_config(workspace)
+                    self.logger.debug(f"Created config for {workspace} with tokens: app_token={workspace_config['SLACK']['app_token'][:10]}..., bot_token={workspace_config['SLACK']['bot_token'][:10]}...")
+
+                    # slrepoBot 인스턴스 생성 (설정 미리 전달)
+                    bot = slrepoBot(provided_config=workspace_config)
+                    
+                    # 핸들러 생성 및 실행
+                    handler = AsyncSocketModeHandler(
+                        bot.app, 
+                        workspace_config['SLACK']['app_token']
+                    )
+                    await handler.start_async()
+                    
+                    # 인스턴스 저장
+                    self.workspace_bots[workspace] = bot
+                    handlers.append(handler)
+
+                    try:
+                        commands = await bot.app.client.commands_list()
+                        self.logger.info(f"Available commands for {workspace}: {commands}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to list commands for {workspace}: {str(e)}")
+
+                    self.logger.info(f"Initialized workspace: {workspace}")
+                
+                except Exception as e:
+                    self.logger.error(f"Failed to initialize workspace {workspace}: {str(e)}", exc_info=True)
+
+            # 모든 봇이 실행 중인 상태 유지
+            while True:
+                await asyncio.sleep(3600)
+
+        finally:
+            # 종료 시 모든 핸들러 정리
+            for handler in handlers:
+                try:
+                    await handler.stop_async()
+                except Exception as e:
+                    self.logger.error(f"Error stopping handler: {str(e)}")
+
+            for bot in self.workspace_bots.values():
+                if hasattr(bot.app.client, 'session') and bot.app.client.session:
+                    await bot.app.client.session.close()
+
 # 메인 애플리케이션 로직
 async def main():
-    bot = slrepoBot()
+    config = configparser.ConfigParser(interpolation=None)
+    config.read('slrepoBot.conf')
+
+    if 'SLACK_WORKSPACES' in config:
+        bot = MultiWorkspaceBot()
+    else:
+        bot = slrepoBot()
+
     await bot.run()
 
 if __name__ == "__main__":
