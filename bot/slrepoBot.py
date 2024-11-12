@@ -335,40 +335,55 @@ class MultiWorkspaceBot:
         enabled_workspaces = self.config['SLACK_WORKSPACES']['enabled_workspaces'].split(', ')
         handlers = []
 
-        try:
-            # 각 워크스페이스별로 slrepoBot 인스턴스 생성
-            for workspace in enabled_workspaces:
+        async def init_workspace(workspace):
+            try:
+                self.logger.info(f"Starting initialization for warkspace: {workspace}")
+                workspace_config = self.create_workspace_config(workspace)
+
+                # slrepoBot 인스턴스 생성 (설정 미리 전달)
+                bot = slrepoBot(provided_config=workspace_config)
+                self.logger.info(f"Created slrepoBot instance for {workspace}")
+                    
+                # 핸들러 생성 및 실행
+                handler = AsyncSocketModeHandler(
+                    bot.app, 
+                    workspace_config['SLACK']['app_token']
+                )
+                self.logger.info(f"Created handler for {workspace}")
+
+                await handler.start_async()
+                self.logger.info(f"Started handler for {workspace}")
+                    
+                # 인스턴스 저장
+                self.workspace_bots[workspace] = bot
+                handlers.append(handler)
+
                 try:
-                    self.logger.info(f"Starting initialization for warkspace: {workspace}")
-                    workspace_config = self.create_workspace_config(workspace)
-                    self.logger.debug(f"Created config for {workspace} with tokens: app_token={workspace_config['SLACK']['app_token'][:10]}..., bot_token={workspace_config['SLACK']['bot_token'][:10]}...")
-
-                    # slrepoBot 인스턴스 생성 (설정 미리 전달)
-                    bot = slrepoBot(provided_config=workspace_config)
-                    
-                    # 핸들러 생성 및 실행
-                    handler = AsyncSocketModeHandler(
-                        bot.app, 
-                        workspace_config['SLACK']['app_token']
-                    )
-                    await handler.start_async()
-                    
-                    # 인스턴스 저장
-                    self.workspace_bots[workspace] = bot
-                    handlers.append(handler)
-
-                    try:
-                        commands = await bot.app.client.commands_list()
-                        self.logger.info(f"Available commands for {workspace}: {commands}")
-                    except Exception as e:
-                        self.logger.error(f"Failed to list commands for {workspace}: {str(e)}")
-
-                    self.logger.info(f"Initialized workspace: {workspace}")
-                
+                    commands = await bot.app.client.commands_list()
+                    self.logger.info(f"Available commands for {workspace}: {commands}")
                 except Exception as e:
-                    self.logger.error(f"Failed to initialize workspace {workspace}: {str(e)}", exc_info=True)
+                    self.logger.error(f"Failed to list commands for {workspace}: {str(e)}")
 
-            # 모든 봇이 실행 중인 상태 유지
+                self.logger.info(f"Initialized workspace: {workspace}")
+                return handler
+                
+            except Exception as e:
+                self.logger.error(f"Failed to initialize workspace {workspace}: {str(e)}", exc_info=True)
+                return None
+            
+        try:
+            init_tasks = [init_workspace(workspace) for workspace in enabled_workspaces]
+            workspace_handlers = await asyncio.gather(*init_tasks)
+        
+            # 성공적으로 초기화된 핸들러만 필터링
+            handlers = [h for h in workspace_handlers if h is not None]
+        
+            for workspace in enabled_workspaces:
+                if workspace in self.workspace_bots:
+                    self.logger.info(f"Workspace {workspace} is active")
+                else:
+                    self.logger.warning(f"Workspace {workspace} failed to initialize")
+
             while True:
                 await asyncio.sleep(3600)
 
