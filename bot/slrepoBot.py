@@ -11,6 +11,7 @@ import socket
 import requests
 import websockets
 from urllib.parse import urlparse
+import subprocess
 import ssl
 
 # 슬래시 명령어 모듈
@@ -22,7 +23,20 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.45 (2024.11.12)'
+__version__ = '0.6.46 (2024.11.13)'
+
+# pass에서 암호화 토큰 가져오기
+def get_secret(path):
+    try:
+        result = subprocess.run(['pass', path], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        else:
+            print(f"Warning: Failed to get scret for {path}: {result.stderr}")
+            return None
+    except Exception as e:
+        print(f"Warning: Error accessing pass: {str(e)}")
+        return None
 
 class slrepoBot:
     def __init__(self, provided_config=None):
@@ -58,6 +72,30 @@ class slrepoBot:
             format='%(asctime)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
+
+        if 'SLACK_WORKSPACES' in config:
+            # 멀티 워크스페이스
+            for workspace in config['SLACK_WORKSPACES']['enabled_workspaces'].split(', '):
+                section = f'SLACK_{workspace}'
+                if section in config:
+                    app_token = get_secret(f'slrepobot/{workspace}/app_token')
+                    bot_token = get_secret(f'slrepobot/{workspace}/bot_token')
+
+                    if app_token and bot_token:
+                        config[section]['app_token'] = app_token
+                        config[section]['bot_token'] = bot_token
+                    else:
+                        logging.error(f"Failed to get tokens for workspace {workspace}")
+        else:
+            # 단일 워크스페이스
+            app_token = get_secret('slrepobot/app_token')
+            bot_token = get_secret('slrepobot/bot_token')
+
+            if app_token and bot_token:
+                config['SLACK']['app_token'] = app_token
+                config['SLACK']['bot_token'] = bot_token
+            else:
+                logging.error("Failed to get tokens from pass")
 
         return config
 
