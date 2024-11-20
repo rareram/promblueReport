@@ -2,25 +2,38 @@ import yaml
 import requests
 import argparse
 from datetime import datetime, timedelta
+import os
+from pathlib import Path
 
+def get_project_root():
+    return Path(__file__).parent.parent
+
+# 환경파일 경로
 def load_config(yaml_path):
-    """Load configuration from YAML file"""
     try:
-        with open(yaml_path, 'r', encoding='utf-8') as f:
+        project_root = get_project_root()
+        full_path = project_root / yaml_path
+
+        if not full_path.exists():
+            print(f"❌ 설정 파일을 찾을 수 없습니다: {full_path}")
+            return None
+
+        with open(full_path, 'r', encoding='utf-8') as f:
+            print(f"📂 설정 파일 로드: {full_path}")
             return yaml.safe_load(f)
     except Exception as e:
         print(f"설정 파일을 읽는 중 오류 발생: {str(e)}")
         return None
 
+# Prometheus 헬스체크
 def test_prometheus(url):
-    """Test Prometheus connection with a simple query"""
     try:
         # 현재 시간 기준으로 5분 전후의 시간범위 설정
         end_time = datetime.now()
         start_time = end_time - timedelta(minutes=5)
         
         params = {
-            'query': 'up',  # 가장 기본적인 쿼리
+            'query': 'up',
             'start': str(int(start_time.timestamp())),
             'end': str(int(end_time.timestamp())),
             'step': '1m'
@@ -47,16 +60,39 @@ def test_prometheus(url):
         print(f"❌ Prometheus 테스트 중 오류 발생: {str(e)}")
         return False
 
+# Grafana 헬스체크
+def test_grafana(url):
+    try:
+        health_url = f"{url}/api/health"
+        response = requests.get(health_url, timeout=5)
+
+        if response.status_code == 200:
+            print(f"✅ Grafana 연결 성공 ({url})")
+            data = response.json()
+            if data.get('database') == 'ok':
+                print("   📊 Grafana 데이터베이스 상태: 정상")
+            return True
+        else:
+            print(f"❌ Grafana 연결 실패 (상태 코드: {response.status_code})")
+            return False
+
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Grafana 서버에 연결할 수 없습니다: {url}")
+        return False
+    except Exception as e:
+        print(f"❌ Grafana 테스트 중 오류 발생: {str(e)}")
+        return False
+
+# Ollama 헬스체크 (모델 확인)
 def test_ollama(url):
-    """Test Ollama connection with a simple prompt"""
     try:
         request_data = {
-            "model": "llama3.2",  # 기본 모델
+            "model": "llama3.2",
             "prompt": "test",
             "stream": False
         }
         
-        response = requests.post(url, json=request_data, timeout=5)
+        response = requests.post(url, json=request_data, timeout=10)
         
         if response.status_code == 200:
             print(f"✅ Ollama 연결 성공 ({url})")
@@ -74,7 +110,7 @@ def test_ollama(url):
 
 def main():
     parser = argparse.ArgumentParser(description='Test Prometheus and Ollama connections')
-    parser.add_argument('--config', default='promblueReport.yml', help='Path to config YAML file')
+    parser.add_argument('--config', default='report/promblueReport.yml', help='Path to config YAML file')
     args = parser.parse_args()
     
     print(f"\n🔍 설정 파일 '{args.config}' 로드 중...")
@@ -84,21 +120,21 @@ def main():
     
     print("\n📊 서비스 연결 테스트 시작...")
     
-    # Prometheus 테스트
-    prom_url = config.get('prometheus', {}).get('url')
-    if prom_url:
-        test_prometheus(prom_url)
-    else:
-        print("❌ Prometheus URL이 설정되지 않았습니다")
-    
-    print()  # 빈 줄 추가
-    
-    # Ollama 테스트
-    ollama_url = config.get('ollama', {}).get('url')
-    if ollama_url:
-        test_ollama(ollama_url)
-    else:
-        print("❌ Ollama URL이 설정되지 않았습니다")
+    services = [
+        ('prometheus', test_prometheus),
+        ('grafana', test_grafana),
+        ('ollama', test_ollama)
+    ]
+
+    for service_name, test_func in services:
+        service_config = config.get(service_name, {})
+        service_url = service_config.get('url')
+
+        if service_url:
+            test_func(service_url)
+        else:
+            print(f"❌ {service_name.title()} URL이 설정되지 않았습니다")
+        print()  # 빈 줄 추가
 
 if __name__ == "__main__":
     main()
