@@ -25,8 +25,8 @@ def load_config(yaml_path):
         print(f"❌ 설정 파일을 읽는 중 오류 발생: {str(e)}")
         return None
 
+# 로그 쿼리
 def query_loki_logs(loki_url, query, start_time, end_time, limit=100):
-    """Query logs from Loki"""
     try:
         url = f"{loki_url}/loki/api/v1/query_range"
         
@@ -59,13 +59,13 @@ def query_loki_logs(loki_url, query, start_time, end_time, limit=100):
         print(f"❌ Loki 쿼리 중 오류 발생: {str(e)}")
         return None
 
+# UTC 타임 포멧
 def format_datetime_kst(dt):
-    """Convert datetime to KST formatted string"""
     kst_time = dt.astimezone(ZoneInfo('Asia/Seoul'))
     return kst_time.strftime('%Y-%m-%d %H:%M:%S KST')
 
+# Loki 타임스탬프로 변환 (ns)
 def convert_loki_timestamp(timestamp_str):
-    """Convert Loki nanosecond timestamp to datetime"""
     try:
         # 나노초를 초로 변환 (문자열을 먼저 정수로 변환)
         timestamp_ns = int(timestamp_str)
@@ -76,18 +76,40 @@ def convert_loki_timestamp(timestamp_str):
         print(f"❌ 타임스탬프 변환 오류: {str(e)}")
         return None
 
+# 파라미터 적용
+def build_loki_query(job_name, additional_labels=None):
+    query = f'{{job="{job_name}"'
+    if additional_labels:
+        for key, value in additional_labels.items():
+            query += f',{key}="{value}"'
+    query += '}'
+    return query
+
 def main():
-    parser = argparse.ArgumentParser(description='Query logs from Loki CLI (KST timezone)')
+    parser = argparse.ArgumentParser(
+        description='Loki 로그 조회 (KST)',
+        usage='%(prog)s [options] job_name\n\n'
+              '예시:\n'
+              '  %(prog)s varlogs\n'
+              '  %(prog)s varlogs --hours 2\n'
+              '  %(prog)s varlogs --limit 200\n'
+              '  %(prog)s varlogs --query \'{job="varlogs",host="myserver"}\''
+    )
+    
+    parser.add_argument('job_name', nargs='?', help='조회할 job 이름')
     parser.add_argument('--config', default='report/promblueReport.yml',
-                       help='Path to config YAML file (relative to project root)')
-    parser.add_argument('--query', required=True,
-                       help='LogQL query (예: {job="varlogs"})')
+                       help='설정 파일 경로 (프로젝트 루트 기준)')
+    parser.add_argument('--query', help='전체 LogQL 쿼리 (job_name 대신 사용)')
     parser.add_argument('--hours', type=int, default=1,
-                       help='How many hours of logs to retrieve')
+                       help='조회할 시간 범위 (시간 단위)')
     parser.add_argument('--limit', type=int, default=100,
-                       help='Maximum number of log lines to retrieve')
+                       help='최대 로그 라인 수')
     
     args = parser.parse_args()
+    
+    if not args.job_name and not args.query:
+        parser.print_help()
+        return
     
     config = load_config(args.config)
     if not config:
@@ -100,18 +122,21 @@ def main():
         print("❌ Loki URL이 설정되지 않았습니다.")
         return
     
+    # 쿼리 생성
+    query = args.query if args.query else build_loki_query(args.job_name)
+    
     now = datetime.now(ZoneInfo('Asia/Seoul'))
     end_time = now
     start_time = end_time - timedelta(hours=args.hours)
     
     print(f"\n🔍 Loki 로그 조회 중...")
-    print(f"• 쿼리: {args.query}")
+    print(f"• 쿼리: {query}")
     print(f"• 기간: {args.hours}시간")
     print(f"• 시작: {format_datetime_kst(start_time)}")
     print(f"• 종료: {format_datetime_kst(end_time)}")
     print(f"• 제한: {args.limit}줄\n")
     
-    results = query_loki_logs(loki_url, args.query, start_time, end_time, args.limit)
+    results = query_loki_logs(loki_url, query, start_time, end_time, args.limit)
     
     if results:
         for stream in results:
