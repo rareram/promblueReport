@@ -4,13 +4,13 @@ import argparse
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
-import urllib.parse
-from zoneinfo import ZoneInfo
 
 def get_project_root():
+    """Get project root directory"""
     return Path(__file__).parent.parent
 
 def load_config(yaml_path):
+    """Load configuration from YAML file with absolute path"""
     try:
         project_root = get_project_root()
         full_path = project_root / yaml_path
@@ -20,116 +20,122 @@ def load_config(yaml_path):
             return None
             
         with open(full_path, 'r', encoding='utf-8') as f:
+            print(f"📂 설정 파일 로드: {full_path}")
             return yaml.safe_load(f)
     except Exception as e:
         print(f"❌ 설정 파일을 읽는 중 오류 발생: {str(e)}")
         return None
 
-def query_loki_logs(loki_url, query, start_time, end_time, limit=100):
-    """Query logs from Loki"""
+def test_prometheus(url):
+    """Test Prometheus connection with a simple query"""
     try:
-        url = f"{loki_url}/loki/api/v1/query_range"
-        
-        start_utc = start_time.astimezone(ZoneInfo('UTC'))
-        end_utc = end_time.astimezone(ZoneInfo('UTC'))
+        end_time = datetime.now()
+        start_time = end_time - timedelta(minutes=5)
         
         params = {
-            'query': query,
-            'start': start_utc.isoformat(),
-            'end': end_utc.isoformat(),
-            'limit': limit,
-            'direction': 'BACKWARD'
+            'query': 'up',
+            'start': str(int(start_time.timestamp())),
+            'end': str(int(end_time.timestamp())),
+            'step': '1m'
         }
         
-        response = requests.get(url, params=params)
+        response = requests.get(f"{url}/api/v1/query_range", params=params, timeout=5)
         
         if response.status_code == 200:
+            print(f"✅ Prometheus 연결 성공 ({url})")
             data = response.json()
-            if 'data' in data and 'result' in data['data']:
-                return data['data']['result']
+            if data['status'] == 'success':
+                return True
             else:
-                print("❌ 로그 데이터가 없습니다.")
-                return None
+                print(f"❌ 프로메테우스 응답 오류: {data.get('error', '알 수 없는 오류')}")
+                return False
         else:
-            print(f"❌ Loki 쿼리 실패 (상태 코드: {response.status_code})")
-            print(f"응답: {response.text}")
-            return None
+            print(f"❌ Prometheus 연결 실패 (상태 코드: {response.status_code})")
+            return False
             
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Prometheus 서버에 연결할 수 없습니다: {url}")
+        return False
     except Exception as e:
-        print(f"❌ Loki 쿼리 중 오류 발생: {str(e)}")
-        return None
+        print(f"❌ Prometheus 테스트 중 오류 발생: {str(e)}")
+        return False
 
-def format_datetime_kst(dt):
-    """Convert datetime to KST formatted string"""
-    kst_time = dt.astimezone(ZoneInfo('Asia/Seoul'))
-    return kst_time.strftime('%Y-%m-%d %H:%M:%S KST')
-
-def convert_loki_timestamp(timestamp_str):
-    """Convert Loki nanosecond timestamp to datetime"""
+def test_grafana(url):
+    """Test Grafana connection with health check API"""
     try:
-        # 나노초를 초로 변환 (문자열을 먼저 정수로 변환)
-        timestamp_ns = int(timestamp_str)
-        timestamp_s = timestamp_ns / 1e9
+        health_url = f"{url}/api/health"
+        response = requests.get(health_url, timeout=5)
         
-        return datetime.fromtimestamp(timestamp_s, ZoneInfo('Asia/Seoul'))
-    except ValueError as e:
-        print(f"❌ 타임스탬프 변환 오류: {str(e)}")
-        return None
+        if response.status_code == 200:
+            print(f"✅ Grafana 연결 성공 ({url})")
+            data = response.json()
+            if data.get('database') == 'ok':
+                print("   📊 Grafana 데이터베이스 상태: 정상")
+            return True
+        else:
+            print(f"❌ Grafana 연결 실패 (상태 코드: {response.status_code})")
+            return False
+            
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Grafana 서버에 연결할 수 없습니다: {url}")
+        return False
+    except Exception as e:
+        print(f"❌ Grafana 테스트 중 오류 발생: {str(e)}")
+        return False
+
+def test_ollama(url):
+    """Test Ollama connection with a simple prompt"""
+    try:
+        request_data = {
+            "model": "llama3.2",
+            "prompt": "test",
+            "stream": False
+        }
+        
+        response = requests.post(url, json=request_data, timeout=5)
+        
+        if response.status_code == 200:
+            print(f"✅ Ollama 연결 성공 ({url})")
+            return True
+        else:
+            print(f"❌ Ollama 연결 실패 (상태 코드: {response.status_code})")
+            return False
+            
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Ollama 서버에 연결할 수 없습니다: {url}")
+        return False
+    except Exception as e:
+        print(f"❌ Ollama 테스트 중 오류 발생: {str(e)}")
+        return False
 
 def main():
-    parser = argparse.ArgumentParser(description='Query logs from Loki CLI (KST timezone)')
-    parser.add_argument('--config', default='report/promblueReport.yml',
+    parser = argparse.ArgumentParser(description='Test Prometheus, Grafana, and Ollama connections')
+    parser.add_argument('--config', default='report/promblueReport.yml', 
                        help='Path to config YAML file (relative to project root)')
-    parser.add_argument('--query', required=True,
-                       help='LogQL query (예: {job="varlogs"})')
-    parser.add_argument('--hours', type=int, default=1,
-                       help='How many hours of logs to retrieve')
-    parser.add_argument('--limit', type=int, default=100,
-                       help='Maximum number of log lines to retrieve')
-    
     args = parser.parse_args()
     
+    print("\n🔍 서비스 연결 테스트 시작...")
     config = load_config(args.config)
     if not config:
         return
+    
+    print("\n📡 각 서비스 연결 확인 중...")
+    
+    services = [
+        ('prometheus', test_prometheus),
+        ('grafana', test_grafana),
+        ('ollama', test_ollama)
+    ]
+    
+    for service_name, test_func in services:
+        service_config = config.get(service_name, {})
+        service_url = service_config.get('url')
         
-    loki_config = config.get('loki', {})
-    loki_url = loki_config.get('url')
-    
-    if not loki_url:
-        print("❌ Loki URL이 설정되지 않았습니다.")
-        return
-    
-    now = datetime.now(ZoneInfo('Asia/Seoul'))
-    end_time = now
-    start_time = end_time - timedelta(hours=args.hours)
-    
-    print(f"\n🔍 Loki 로그 조회 중...")
-    print(f"• 쿼리: {args.query}")
-    print(f"• 기간: {args.hours}시간")
-    print(f"• 시작: {format_datetime_kst(start_time)}")
-    print(f"• 종료: {format_datetime_kst(end_time)}")
-    print(f"• 제한: {args.limit}줄\n")
-    
-    results = query_loki_logs(loki_url, args.query, start_time, end_time, args.limit)
-    
-    if results:
-        for stream in results:
-            labels = stream.get('stream', {})
-            print(f"\n📄 Stream Labels: {labels}")
-            
-            values = stream.get('values', [])
-            if values:
-                print("\n로그 내용:")
-                for timestamp, log in values:
-                    dt = convert_loki_timestamp(timestamp)
-                    if dt:
-                        time_str = dt.strftime('%Y-%m-%d %H:%M:%S KST')
-                        print(f"{time_str}: {log}")
-            else:
-                print("로그 데이터가 없습니다.")
-    else:
-        print("❌ 조회된 로그가 없습니다.")
+        if service_url:
+            test_func(service_url)
+        else:
+            print(f"❌ {service_name.title()} URL이 설정되지 않았습니다")
+        print()  # 빈 줄 추가
 
 if __name__ == "__main__":
     main()
