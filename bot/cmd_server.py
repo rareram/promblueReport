@@ -376,15 +376,23 @@ class ServerManager:
             if server_info.empty:
                 await say(f"{ip}에 해당하는 서버 정보를 찾을 수 없습니다.")
                 return
-        
-            formatted_info = template.replace('##', '\n')
-            for column, value in server_info.iloc[0].items():
-                placeholder = f"{{{column}}}"
-                if placeholder in formatted_info:
-                    value = '-' if pd.isna(value) or value == '' else str(value)
-                    formatted_info = formatted_info.replace(placeholder, value)
-        
-            await say(formatted_info)
+            
+            # 검색된 모든 서버 정보를 처리
+            responses = []
+            for idx, row in server_info.iterrows():
+                formatted_info = template.replace('##', '\n')
+                for column, value in row.items():
+                    placeholder = f"{{{column}}}"
+                    if placeholder in formatted_info:
+                        value = '-' if pd.isna(value) or value == '' else str(value)
+                        formatted_info = formatted_info.replace(placeholder, value)
+                responses.append(formatted_info)
+
+            header = f"🔍 *검색된 서버: {len(responses)}개*\n"
+            separator = "\n" + "-" * 50 + "\n"
+            final_response = header + separator.join(responses)
+
+            await say(final_response)
         except Exception as e:
             self.logger.error(f"Error occurred while handling {command['command']} command: {str(e)}", exc_info=True)
             await say(f"서버 정보 조회 중 오류가 발생했습니다: {str(e)}")

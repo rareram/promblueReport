@@ -23,7 +23,7 @@ import cmd_fun         #
 # import cmd_aws         # TODO PaaS & SaaS on AWS ...
 # import cmd_azure       # TODO PaaS & SaaS on Azure ...
 
-__version__ = '0.6.46 (2024.11.13)'
+__version__ = '0.6.47 (2025.1.3)'
 
 # pass에서 암호화 토큰 가져오기
 def get_secret(path):
