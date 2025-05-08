@@ -1,0 +1,27 @@
+[project]
+name = "prombluereport"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.11.18",
+    "configparser>=7.2.0",
+    "logging>=0.4.9.6",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "pillow>=11.2.1",
+    "prometheus-api-client>=0.6.0",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
+    "python-dateutil>=2.9.0.post0",
+    "pyyaml>=6.0.2",
+    "redis>=6.0.0",
+    "requests>=2.32.3",
+    "rq>=2.3.2",
+    "selenium>=4.32.0",
+    "slack-bolt>=1.23.0",
+    "slack-sdk>=3.35.0",
+    "websockets>=15.0.1",
+    "xlsxwriter>=3.2.3",
+]

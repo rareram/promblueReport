@@ -92,7 +92,7 @@ def test_ollama(url):
             "stream": False
         }
         
-        response = requests.post(url, json=request_data, timeout=5)
+        response = requests.post(url, json=request_data, timeout=10)
         
         if response.status_code == 200:
             print(f"✅ Ollama 연결 성공 ({url})")

@@ -28,7 +28,7 @@ def load_config(yaml_path):
 # Ollama 로그 분석
 def analyze_with_ollama(ollama_url, logs_content):
     try:
-        prompt = f"""다음 로그를 분석하고 특이사항을 정리해주세요:
+        prompt = f"""로그를 분석하고 특이사항을 정리. 한글로 작성:
 
 {logs_content}"""
 
